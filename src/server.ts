@@ -4,20 +4,35 @@ import { URL } from "node:url";
 import { ensureLocalToken, isAuthorized } from "./auth.js";
 import { createChatGptReview, createCodexPrompt } from "./core.js";
 import { dashboardHtml } from "./dashboard.js";
-import { readTextIfExists, writeJson, writeText } from "./fsx.js";
+import { appendText, pathExists, readTextIfExists, writeJson, writeText } from "./fsx.js";
 import { getGitInfo } from "./git.js";
 import { bridgePath, getBridgeDir, resolveProjectRoot } from "./paths.js";
 import { redactSecrets } from "./redact.js";
 import { listProjects } from "./registry.js";
-import { createApproval, listApprovals, resolveApproval } from "./safety.js";
+import { classifyCommand, createApproval, listApprovals, resolveApproval } from "./safety.js";
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
-import type { ServerInfo, ServerOptions } from "./types.js";
+import type { AgentBridgeSession, RiskLevel, ServerInfo, ServerOptions } from "./types.js";
 
 export interface RunningAgentBridgeServer {
   server: http.Server;
   info: ServerInfo;
   close: () => Promise<void>;
 }
+
+type SessionSummary = Pick<
+  AgentBridgeSession,
+  | "session_id"
+  | "project_root"
+  | "project_name"
+  | "status"
+  | "user_goal"
+  | "active_branch"
+  | "chatgpt_plan_status"
+  | "codex_task_status"
+  | "last_test_status"
+  | "next_action"
+  | "updated_at"
+>;
 
 function sendJson(response: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body, null, 2);
@@ -72,6 +87,48 @@ function stringField(body: unknown, field: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function isRiskLevel(value: string): value is RiskLevel {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+function readSessionSummary(root: string): SessionSummary {
+  const session = readSession(root);
+  return {
+    session_id: session.session_id,
+    project_root: session.project_root,
+    project_name: session.project_name,
+    status: session.status,
+    user_goal: session.user_goal,
+    active_branch: session.active_branch,
+    chatgpt_plan_status: session.chatgpt_plan_status,
+    codex_task_status: session.codex_task_status,
+    last_test_status: session.last_test_status,
+    next_action: session.next_action,
+    updated_at: session.updated_at
+  };
+}
+
+function readRedactedTextIfExists(filePath: string, fallback = ""): string {
+  return redactSecrets(readTextIfExists(filePath, fallback));
+}
+
+function readRepoStatus(root: string): {
+  available: boolean;
+  branch: string;
+  status: string;
+  changed_files: string[];
+  error: string | null;
+} {
+  const git = getGitInfo(root, "short");
+  return {
+    available: git.available,
+    branch: git.branch,
+    status: git.status,
+    changed_files: git.changedFiles,
+    error: git.error ?? null
+  };
+}
+
 function writeServerInfo(root: string, info: ServerInfo): void {
   writeJson(bridgePath(root, "server.json"), info);
 }
@@ -107,13 +164,59 @@ export async function startAgentBridgeServer(
         return;
       }
 
+      if (!isAuthorized(request.headers, token)) {
+        sendJson(response, 401, { ok: false, error: "Unauthorized." });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/dashboard") {
         sendHtml(response, 200, dashboardHtml(token));
         return;
       }
 
-      if (!isAuthorized(request.headers, token)) {
-        sendJson(response, 401, { ok: false, error: "Unauthorized." });
+      if (request.method === "GET" && url.pathname === "/chatgpt/session-summary") {
+        sendJson(response, 200, { ok: true, session: readSessionSummary(root) });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/chatgpt/repo-status") {
+        sendJson(response, 200, { ok: true, ...readRepoStatus(root) });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/chatgpt/context") {
+        const filePath = bridgePath(root, "project_context.md");
+        if (!pathExists(filePath)) {
+          sendJson(response, 404, {
+            ok: false,
+            error: "Project context has not been captured yet. Run agentbridge capture."
+          });
+          return;
+        }
+
+        sendJson(response, 200, { ok: true, context: readRedactedTextIfExists(filePath) });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/chatgpt/next-task") {
+        sendJson(response, 200, {
+          ok: true,
+          task: readRedactedTextIfExists(
+            bridgePath(root, "codex_prompt.md"),
+            "No Codex prompt found. Run agentbridge prompt or POST /chatgpt/create-codex-prompt."
+          )
+        });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/chatgpt/review-packet") {
+        sendJson(response, 200, {
+          ok: true,
+          review: readRedactedTextIfExists(
+            bridgePath(root, "chatgpt_review.md"),
+            "No ChatGPT review packet found. Run agentbridge review or POST /review."
+          )
+        });
         return;
       }
 
@@ -128,14 +231,14 @@ export async function startAgentBridgeServer(
           sendJson(response, 404, { ok: false, error: "Project context has not been captured yet." });
           return;
         }
-        sendJson(response, 200, { ok: true, context });
+        sendJson(response, 200, { ok: true, context: redactSecrets(context) });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/chatgpt/plan") {
         sendJson(response, 200, {
           ok: true,
-          plan: readTextIfExists(bridgePath(root, "chatgpt_plan.md"), "No ChatGPT plan found.")
+          plan: readRedactedTextIfExists(bridgePath(root, "chatgpt_plan.md"), "No ChatGPT plan found.")
         });
         return;
       }
@@ -143,7 +246,7 @@ export async function startAgentBridgeServer(
       if (request.method === "GET" && url.pathname === "/codex/task") {
         sendJson(response, 200, {
           ok: true,
-          task: readTextIfExists(bridgePath(root, "codex_prompt.md"), "No Codex prompt found.")
+          task: readRedactedTextIfExists(bridgePath(root, "codex_prompt.md"), "No Codex prompt found.")
         });
         return;
       }
@@ -151,21 +254,13 @@ export async function startAgentBridgeServer(
       if (request.method === "GET" && url.pathname === "/codex/result") {
         sendJson(response, 200, {
           ok: true,
-          result: readTextIfExists(bridgePath(root, "codex_result.md"), "No Codex result found.")
+          result: readRedactedTextIfExists(bridgePath(root, "codex_result.md"), "No Codex result found.")
         });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/repo/status") {
-        const git = getGitInfo(root, "short");
-        sendJson(response, 200, {
-          ok: true,
-          available: git.available,
-          branch: git.branch,
-          status: git.status,
-          changed_files: git.changedFiles,
-          error: git.error
-        });
+        sendJson(response, 200, { ok: true, ...readRepoStatus(root) });
         return;
       }
 
@@ -195,7 +290,10 @@ export async function startAgentBridgeServer(
       if (request.method === "GET" && url.pathname === "/codex/progress") {
         sendJson(response, 200, {
           ok: true,
-          progress: readTextIfExists(bridgePath(root, "codex_progress.md"), "# Codex Progress\n\nNo progress reported yet.\n")
+          progress: readRedactedTextIfExists(
+            bridgePath(root, "codex_progress.md"),
+            "# Codex Progress\n\nNo progress reported yet.\n"
+          )
         });
         return;
       }
@@ -227,12 +325,132 @@ export async function startAgentBridgeServer(
         writeText(bridgePath(root, "chatgpt_plan.md"), redactSecrets(plan));
         const session = updateSession(root, {
           status: "planning",
-          user_goal: userGoal ?? readSession(root).user_goal,
+          user_goal: userGoal ? redactSecrets(userGoal) : readSession(root).user_goal,
           chatgpt_plan_status: "ready",
           next_action: "create_codex_prompt"
         });
-        appendAudit(root, "http.chatgpt.plan", { plan_length: plan.length, user_goal: userGoal });
+        appendAudit(root, "http.chatgpt.plan", { plan_length: plan.length, user_goal: userGoal ? redactSecrets(userGoal) : undefined });
         sendJson(response, 200, { ok: true, session });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/chatgpt/create-codex-prompt") {
+        const body = await readRequestBody(request);
+        const plan = stringField(body, "plan");
+        const userGoal = stringField(body, "user_goal");
+
+        if (plan) {
+          writeText(bridgePath(root, "chatgpt_plan.md"), redactSecrets(plan));
+        }
+
+        if (plan || userGoal) {
+          updateSession(root, {
+            status: plan ? "planning" : readSession(root).status,
+            user_goal: userGoal ? redactSecrets(userGoal) : readSession(root).user_goal,
+            chatgpt_plan_status: plan ? "ready" : readSession(root).chatgpt_plan_status,
+            next_action: "create_codex_prompt"
+          });
+        }
+
+        createCodexPrompt(root);
+        appendAudit(root, "http.chatgpt.create_prompt", {
+          plan_length: plan?.length ?? 0,
+          has_user_goal: Boolean(userGoal)
+        });
+        sendJson(response, 200, {
+          ok: true,
+          prompt: readRedactedTextIfExists(bridgePath(root, "codex_prompt.md")),
+          session: readSessionSummary(root)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/chatgpt/report-progress") {
+        const body = await readRequestBody(request);
+        const progress = stringField(body, "progress");
+        if (!progress) {
+          sendJson(response, 400, { ok: false, error: "Missing string field: progress." });
+          return;
+        }
+
+        const entry = `\n## ${new Date().toISOString()}\n\n${redactSecrets(progress).trim()}\n`;
+        appendText(bridgePath(root, "codex_progress.md"), entry);
+        updateSession(root, {
+          status: "codex_working",
+          codex_task_status: "working",
+          next_action: "codex_submit_result"
+        });
+        appendAudit(root, "http.chatgpt.progress", { progress_length: progress.length });
+        sendJson(response, 200, { ok: true, session: readSessionSummary(root) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/chatgpt/submit-codex-result") {
+        const body = await readRequestBody(request);
+        const result = stringField(body, "result");
+        if (!result) {
+          sendJson(response, 400, { ok: false, error: "Missing string field: result." });
+          return;
+        }
+
+        writeText(bridgePath(root, "codex_result.md"), redactSecrets(result));
+        updateSession(root, {
+          status: "result_ready",
+          codex_task_status: "submitted",
+          next_action: "review_codex_result"
+        });
+        appendAudit(root, "http.chatgpt.result", { result_length: result.length });
+        sendJson(response, 200, { ok: true, session: readSessionSummary(root) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/chatgpt/classify-command") {
+        const body = await readRequestBody(request);
+        const command = stringField(body, "command");
+        if (!command) {
+          sendJson(response, 400, { ok: false, error: "Missing string field: command." });
+          return;
+        }
+
+        const risk = classifyCommand(command);
+        appendAudit(root, "http.chatgpt.classify_command", {
+          command: redactSecrets(command),
+          risk: risk.risk,
+          blocked: risk.blocked
+        });
+        sendJson(response, 200, { ok: true, ...risk });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/chatgpt/request-approval") {
+        const body = await readRequestBody(request);
+        const action = stringField(body, "action");
+        if (!action) {
+          sendJson(response, 400, { ok: false, error: "Missing string field: action." });
+          return;
+        }
+
+        const riskInput = stringField(body, "risk");
+        if (riskInput && !isRiskLevel(riskInput)) {
+          sendJson(response, 400, { ok: false, error: "Invalid approval risk." });
+          return;
+        }
+        const risk = riskInput && isRiskLevel(riskInput) ? riskInput : undefined;
+
+        const approval = createApproval(root, {
+          actor: stringField(body, "actor") ?? "chatgpt",
+          action,
+          command: stringField(body, "command"),
+          reason: stringField(body, "reason"),
+          risk
+        });
+        appendAudit(root, "http.chatgpt.approval.request", {
+          id: approval.id,
+          actor: approval.actor,
+          action: approval.action,
+          risk: approval.risk
+        });
+        sendJson(response, 200, { ok: true, approval });
         return;
       }
 

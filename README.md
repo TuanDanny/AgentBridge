@@ -108,7 +108,7 @@ Stop it from another terminal:
 agentbridge stop
 ```
 
-The daemon writes `.agentbridge/server.json` and a local `.agentbridge/local_token`. All data endpoints require the token via `Authorization: Bearer <token>` or `x-agentbridge-token`. `/health` is intentionally public and returns only basic liveness data.
+The daemon writes `.agentbridge/server.json` and a local `.agentbridge/local_token`. All endpoints except `/health` require the token via `Authorization: Bearer <token>` or `x-agentbridge-token`. `/health` is intentionally public and returns only basic liveness data.
 
 Implemented endpoints:
 
@@ -132,6 +132,8 @@ Open the local dashboard while the daemon is running:
 ```text
 http://127.0.0.1:7777/dashboard
 ```
+
+The dashboard endpoint is token-protected like the other non-health endpoints.
 
 Dashboard actions use these additional local endpoints:
 
@@ -169,6 +171,29 @@ classify_command
 ```
 
 The MCP server reads and writes the same `.agentbridge/` shared session as the CLI and daemon. It does not call OpenAI APIs.
+
+## Phase 8 ChatGPT Web Bridge
+
+AgentBridge now exposes token-protected local HTTP endpoints under `/chatgpt/*` for browser and ChatGPT-web bridge preparation.
+
+This does not require OpenAI API keys. It does not replace the accepted Codex STDIO MCP flow.
+
+Implemented ChatGPT bridge endpoints:
+
+```text
+GET  /chatgpt/session-summary
+GET  /chatgpt/repo-status
+GET  /chatgpt/context
+GET  /chatgpt/next-task
+GET  /chatgpt/review-packet
+POST /chatgpt/create-codex-prompt
+POST /chatgpt/report-progress
+POST /chatgpt/submit-codex-result
+POST /chatgpt/classify-command
+POST /chatgpt/request-approval
+```
+
+See `CHATGPT_WEB_BRIDGE.md` for usage, security notes, and manual curl checks.
 
 ## Phase 4 Safety And Approvals
 

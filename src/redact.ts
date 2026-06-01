@@ -1,10 +1,12 @@
 const REDACTED = "[REDACTED]";
+const sensitiveNamePattern =
+  String.raw`(?:[A-Za-z_][A-Za-z0-9_]*?(?:KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CLIENT_SECRET|AUTH|JWT)[A-Za-z0-9_]*|KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CLIENT_SECRET|AUTH|JWT)`;
 
 const sensitiveEnvPattern =
-  /^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CLIENT_SECRET|AUTH|JWT)[A-Za-z0-9_]*\s*=\s*)(.*)$/gim;
+  new RegExp(String.raw`^(\s*(?:export\s+)?${sensitiveNamePattern}\s*=\s*)(.*)$`, "gim");
 
 const assignmentPattern =
-  /(\b[A-Za-z_][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CLIENT_SECRET|AUTH|JWT)[A-Za-z0-9_]*\b\s*[:=]\s*)(["']?)[^\s"',}]+(\2)/gi;
+  new RegExp(String.raw`(\b${sensitiveNamePattern}\b\s*[:=]\s*)(["']?)[^\s"',}]+(\2)`, "gi");
 
 const privateKeyPattern =
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;

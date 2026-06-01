@@ -46,6 +46,15 @@ describe("local daemon", () => {
     });
     expect(denied.status).toBe(401);
 
+    for (const path of ["/dashboard", "/chatgpt/session-summary", "/chatgpt/repo-status", "/chatgpt/context"]) {
+      const protectedResponse = await requestJson({
+        host: running.info.host,
+        port: running.info.port,
+        path
+      });
+      expect(protectedResponse.status).toBe(401);
+    }
+
     const allowed = await requestJson({
       host: running.info.host,
       port: running.info.port,
@@ -54,6 +63,187 @@ describe("local daemon", () => {
     });
     expect(allowed.status).toBe(200);
     expect(allowed.body).toMatchObject({ ok: true });
+  });
+
+  it("serves ChatGPT bridge read endpoints with token and redacts context", async () => {
+    const root = makeTempRoot();
+    captureProject(root, "short");
+    fs.appendFileSync(path.join(root, ".agentbridge", "project_context.md"), "\nOPENAI_API_KEY=sk-testsecret1234567890\n");
+    const running = await startAgentBridgeServer(root, { port: 0 });
+    runningServers.push(running);
+    const token = readLocalToken(root);
+
+    const session = await requestJson<{ ok: boolean; session: { project_name: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/session-summary",
+      token
+    });
+    expect(session.status).toBe(200);
+    expect(session.body).toMatchObject({ ok: true });
+    expect(session.body.session.project_name).toBe(path.basename(root));
+
+    const repo = await requestJson<{ ok: boolean; available: boolean; branch: string; changed_files: string[] }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/repo-status",
+      token
+    });
+    expect(repo.status).toBe(200);
+    expect(repo.body.ok).toBe(true);
+    expect(typeof repo.body.available).toBe("boolean");
+    expect(Array.isArray(repo.body.changed_files)).toBe(true);
+
+    const context = await requestJson<{ ok: boolean; context: string }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/context",
+      token
+    });
+    expect(context.status).toBe(200);
+    expect(context.body.context).toContain("# Project Context");
+    expect(context.body.context).toContain("[REDACTED]");
+    expect(context.body.context).not.toContain("sk-testsecret");
+
+    const task = await requestJson<{ ok: boolean; task: string }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/next-task",
+      token
+    });
+    expect(task.status).toBe(200);
+    expect(task.body.task).toContain("No Codex prompt found");
+
+    const review = await requestJson<{ ok: boolean; review: string }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/review-packet",
+      token
+    });
+    expect(review.status).toBe(200);
+    expect(review.body.review).toContain("No ChatGPT review packet found");
+  });
+
+  it("returns a useful ChatGPT context fallback when context has not been captured", async () => {
+    const root = makeTempRoot();
+    const running = await startAgentBridgeServer(root, { port: 0 });
+    runningServers.push(running);
+
+    const context = await requestJson<{ ok: boolean; error: string }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/context",
+      token: readLocalToken(root)
+    });
+
+    expect(context.status).toBe(404);
+    expect(context.body.error).toContain("Run agentbridge capture");
+  });
+
+  it("creates prompts and records progress/results through ChatGPT bridge endpoints", async () => {
+    const root = makeTempRoot();
+    captureProject(root, "short");
+    const running = await startAgentBridgeServer(root, { port: 0 });
+    runningServers.push(running);
+    const token = readLocalToken(root);
+
+    const prompt = await requestJson<{ ok: boolean; prompt: string; session: { user_goal: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/create-codex-prompt",
+      method: "POST",
+      token,
+      body: {
+        plan: "# ChatGPT Plan\n\nUse MY_TOKEN=secret-value while planning.",
+        user_goal: "Bridge task"
+      }
+    });
+    expect(prompt.status).toBe(200);
+    expect(prompt.body.prompt).toContain("# Task for Codex");
+    expect(prompt.body.prompt).toContain("[REDACTED]");
+    expect(prompt.body.session.user_goal).toBe("Bridge task");
+    expect(fs.readFileSync(path.join(root, ".agentbridge", "chatgpt_plan.md"), "utf8")).not.toContain("secret-value");
+
+    const task = await requestJson<{ ok: boolean; task: string }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/next-task",
+      token
+    });
+    expect(task.body.task).toContain("Bridge task");
+
+    const progress = await requestJson<{ ok: boolean; session: { status: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/report-progress",
+      method: "POST",
+      token,
+      body: { progress: "Working with API_TOKEN=abc123." }
+    });
+    expect(progress.status).toBe(200);
+    expect(progress.body.session.status).toBe("codex_working");
+    const progressFile = fs.readFileSync(path.join(root, ".agentbridge", "codex_progress.md"), "utf8");
+    expect(progressFile).toContain("[REDACTED]");
+    expect(progressFile).not.toContain("abc123");
+
+    const result = await requestJson<{ ok: boolean; session: { status: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/submit-codex-result",
+      method: "POST",
+      token,
+      body: { result: "# Codex Result\n\nDone with PASSWORD=hunter2." }
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.session.status).toBe("result_ready");
+    const resultFile = fs.readFileSync(path.join(root, ".agentbridge", "codex_result.md"), "utf8");
+    expect(resultFile).toContain("[REDACTED]");
+    expect(resultFile).not.toContain("hunter2");
+  });
+
+  it("classifies risky ChatGPT commands and creates approval requests", async () => {
+    const root = makeTempRoot();
+    const running = await startAgentBridgeServer(root, { port: 0 });
+    runningServers.push(running);
+    const token = readLocalToken(root);
+
+    const classified = await requestJson<{
+      ok: boolean;
+      risk: string;
+      requiresApproval: boolean;
+      blocked: boolean;
+      reasons: string[];
+    }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/classify-command",
+      method: "POST",
+      token,
+      body: { command: "rm -rf node_modules" }
+    });
+    expect(classified.status).toBe(200);
+    expect(classified.body.risk).toBe("high");
+    expect(classified.body.requiresApproval).toBe(true);
+    expect(classified.body.blocked).toBe(true);
+    expect(classified.body.reasons).toContain("Recursive force delete.");
+
+    const approval = await requestJson<{ ok: boolean; approval: { actor: string; status: string; risk: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/request-approval",
+      method: "POST",
+      token,
+      body: {
+        action: "run_command",
+        command: "git push --force",
+        reason: "Need explicit user approval.",
+        risk: "high"
+      }
+    });
+    expect(approval.status).toBe(200);
+    expect(approval.body.approval.actor).toBe("chatgpt");
+    expect(approval.body.approval.status).toBe("pending");
+    expect(approval.body.approval.risk).toBe("high");
   });
 
   it("returns captured context and accepts ChatGPT plan and Codex result updates", async () => {
@@ -141,7 +331,9 @@ describe("local daemon", () => {
     runningServers.push(running);
     const token = readLocalToken(root);
 
-    const dashboardResponse = await fetch(`http://${running.info.host}:${running.info.port}/dashboard`);
+    const dashboardResponse = await fetch(`http://${running.info.host}:${running.info.port}/dashboard`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
     expect(dashboardResponse.status).toBe(200);
     expect(await dashboardResponse.text()).toContain("AgentBridge Dashboard");
 

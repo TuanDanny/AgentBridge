@@ -9,6 +9,8 @@
   "files": [
     "dist",
     "README.md",
+    "CHATGPT_WEB_BRIDGE.md",
+    "CHATGPT_WEB_BRIDGE_ACCEPTANCE.md",
     "SPEC.md",
     "MCP_TOOLS.md",
     "SESSION_SCHEMA.json",

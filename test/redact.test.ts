@@ -18,6 +18,15 @@ describe("redactSecrets", () => {
     expect(output).not.toContain("sk-123456789012345678901234");
   });
 
+  it("redacts exact sensitive variable names outside line starts", () => {
+    const output = redactSecrets("Done with PASSWORD=hunter2 and TOKEN: abc123.");
+
+    expect(output).toContain("PASSWORD=[REDACTED]");
+    expect(output).toContain("TOKEN: [REDACTED]");
+    expect(output).not.toContain("hunter2");
+    expect(output).not.toContain("abc123");
+  });
+
   it("redacts private key blocks and bearer tokens", () => {
     const input = `-----BEGIN PRIVATE KEY-----
 abc123
