@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.agentbridge/
+.env
+.env.*
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/
+.idea/

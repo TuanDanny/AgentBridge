@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/session.schema.json",
+  "title": "AgentBridge Session",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "project_root",
+    "project_name",
+    "status",
+    "user_goal",
+    "active_branch",
+    "chatgpt_plan_status",
+    "codex_task_status",
+    "last_test_status",
+    "next_action",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "project_root": {
+      "type": "string"
+    },
+    "project_name": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "initialized",
+        "captured",
+        "planning",
+        "prompt_ready",
+        "codex_working",
+        "result_ready",
+        "review_ready"
+      ]
+    },
+    "user_goal": {
+      "type": "string"
+    },
+    "active_branch": {
+      "type": "string"
+    },
+    "chatgpt_plan_status": {
+      "type": "string",
+      "enum": [
+        "missing",
+        "draft",
+        "ready"
+      ]
+    },
+    "codex_task_status": {
+      "type": "string",
+      "enum": [
+        "missing",
+        "waiting",
+        "ready",
+        "working",
+        "submitted"
+      ]
+    },
+    "last_test_status": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "passed",
+        "failed",
+        "not_run"
+      ]
+    },
+    "next_action": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

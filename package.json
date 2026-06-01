@@ -1,0 +1,43 @@
+{
+  "name": "agentbridge",
+  "version": "0.1.0",
+  "description": "Local shared-session bridge for ChatGPT and Codex.",
+  "type": "module",
+  "bin": {
+    "agentbridge": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "SPEC.md",
+    "MCP_TOOLS.md",
+    "SESSION_SCHEMA.json",
+    "SAFETY_RULES.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "agentbridge",
+    "codex",
+    "chatgpt",
+    "mcp",
+    "cli"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^14.0.2",
+    "qrcode-terminal": "^0.12.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/qrcode-terminal": "^0.12.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  }
+}
