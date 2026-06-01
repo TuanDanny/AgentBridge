@@ -28,6 +28,7 @@ import { startAgentBridgeServer } from "./server.js";
 import type { ApprovalStatus, RiskLevel } from "./types.js";
 import { addProject, listProjects, registryPath, removeProject } from "./registry.js";
 import { createPairingInfo } from "./pairing.js";
+import { formatTunnelTestResult, registerTunnel, testTunnel, tunnelGuide, tunnelStatus } from "./tunnel.js";
 
 function printResult(result: { message: string; bridgeDir: string; changedFiles: string[] }): void {
   console.log(result.message);
@@ -259,6 +260,50 @@ group
   .action(() => {
     try {
       console.log(getGroupStatus());
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+const tunnel = program.command("tunnel").description("Manage a user-controlled secure tunnel bridge.");
+
+tunnel
+  .command("guide")
+  .description("Print secure tunnel setup steps for cloudflared or ngrok.")
+  .action(() => {
+    console.log(tunnelGuide());
+  });
+
+tunnel
+  .command("register")
+  .description("Register a public HTTPS tunnel URL.")
+  .argument("<public-url>", "public tunnel URL")
+  .option("--allow-insecure", "allow http:// URLs for local testing only")
+  .action((publicUrl: string, options: { allowInsecure?: boolean }) => {
+    try {
+      printResult(registerTunnel(process.cwd(), publicUrl, { allowInsecure: options.allowInsecure }));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+tunnel
+  .command("status")
+  .description("Print registered tunnel status without exposing the local token.")
+  .action(() => {
+    try {
+      console.log(tunnelStatus());
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+tunnel
+  .command("test")
+  .description("Test the registered tunnel against health, auth, repo, and safety endpoints.")
+  .action(async () => {
+    try {
+      console.log(formatTunnelTestResult(await testTunnel()));
     } catch (error) {
       handleError(error);
     }

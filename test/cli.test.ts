@@ -95,4 +95,22 @@ describe("compiled CLI smoke tests", () => {
     expect(status).toContain("Group handoff exists: yes");
     expect(status).toContain("Group decision exists: yes");
   });
+
+  it("supports secure tunnel CLI guide, register, and status commands", () => {
+    const root = makeTempRoot("agentbridge-cli-tunnel-");
+
+    const guide = runCli(root, "tunnel", "guide");
+    expect(guide).toContain("cloudflared tunnel --url http://127.0.0.1:7777");
+    expect(guide).toContain("ngrok http 7777");
+
+    expect(runCli(root, "tunnel", "register", "https://example.trycloudflare.com")).toContain(
+      "Registered tunnel URL"
+    );
+    const status = runCli(root, "tunnel", "status");
+    const remote = fs.readFileSync(path.join(root, ".agentbridge", "remote_bridge.json"), "utf8");
+
+    expect(status).toContain("Public URL: https://example.trycloudflare.com");
+    expect(status).toContain("Token value: hidden");
+    expect(remote).not.toContain("local_token");
+  });
 });

@@ -79,6 +79,7 @@ AgentBridge creates:
   group_brief.md
   group_handoff.md
   group_decision.md
+  remote_bridge.json
   next_action.md
   approvals.json
   approval_queue.jsonl
@@ -223,6 +224,33 @@ Generated files:
 `group apply-decision` reads the local decision file, redacts secret-like values, updates `chatgpt_plan.md` and `next_action.md`, regenerates `codex_prompt.md`, and records `group.apply_decision` in the audit log. It does not run Codex.
 
 See `GROUP_CHAT_COMPANION.md` for the workflow and safety notes.
+
+## v0.3-beta Secure Tunnel Bridge
+
+AgentBridge can register and test a user-managed HTTPS tunnel that forwards to the local HTTP daemon. This is local-first tunnel preparation, not cloud/team/account mode.
+
+Commands:
+
+```text
+agentbridge tunnel guide
+agentbridge tunnel register <public-url>
+agentbridge tunnel status
+agentbridge tunnel test
+```
+
+Default behavior:
+
+```text
+- tunnel register accepts https:// URLs.
+- tunnel register rejects http:// URLs unless --allow-insecure is set.
+- .agentbridge/remote_bridge.json stores public_url and local_url only.
+- tunnel status never prints the full local token.
+- tunnel test checks /health, /chatgpt auth, repo status, and command safety.
+```
+
+Do not share `.agentbridge/local_token`. Do not commit `.agentbridge/remote_bridge.json` if it contains a private tunnel URL.
+
+See `SECURE_TUNNEL_BRIDGE.md` for setup steps and security notes.
 
 ## Phase 4 Safety And Approvals
 
