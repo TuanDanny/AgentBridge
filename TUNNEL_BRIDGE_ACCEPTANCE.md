@@ -27,6 +27,32 @@ Tunnel endpoint testing is covered by `test/tunnel.test.ts` with a fake local HT
 }
 ```
 
+## Manual Public Tunnel Verification
+
+Date: 2026-06-01
+
+Tunnel provider: Cloudflare quick tunnel / trycloudflare.com
+
+Local target: http://127.0.0.1:7777
+
+Public tunnel test: PASS
+
+Quick tunnel URLs are temporary. The specific public URL is intentionally not recorded here.
+
+Checklist:
+
+```text
+[x] GET /health: PASS (status 200)
+[x] GET /chatgpt/session-summary without token: PASS (status 401)
+[x] GET /chatgpt/session-summary with token: PASS (status 200)
+[x] GET /chatgpt/repo-status with token: PASS (status 200)
+[x] POST /chatgpt/classify-command blocks rm -rf node_modules: PASS (status 200, risk high, blocked true)
+```
+
+No token value was printed or committed during this verification.
+
+`/chatgpt/*` remained token-protected through the public tunnel.
+
 ## Acceptance Checklist
 
 ```text
