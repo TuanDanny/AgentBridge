@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import http from "node:http";
 import { URL } from "node:url";
 import { ensureLocalToken, isAuthorized } from "./auth.js";
@@ -6,9 +7,10 @@ import { createChatGptReview, createCodexPrompt } from "./core.js";
 import { dashboardHtml } from "./dashboard.js";
 import { appendText, pathExists, readTextIfExists, writeJson, writeText } from "./fsx.js";
 import { getGitInfo } from "./git.js";
+import { createCodexChangesSummary, createProjectInspectorSnapshot, projectIdFromName } from "./inspector.js";
 import { bridgePath, getBridgeDir, resolveProjectRoot } from "./paths.js";
 import { redactSecrets } from "./redact.js";
-import { listProjects } from "./registry.js";
+import { listProjects, type RegisteredProject } from "./registry.js";
 import { classifyCommand, createApproval, listApprovals, resolveApproval } from "./safety.js";
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
 import type { AgentBridgeSession, RiskLevel, ServerInfo, ServerOptions } from "./types.js";
@@ -33,6 +35,14 @@ type SessionSummary = Pick<
   | "next_action"
   | "updated_at"
 >;
+
+interface InspectorProjectRoute {
+  id: string;
+  name: string;
+  root: string;
+  registered: boolean;
+  last_seen_at: string;
+}
 
 function sendJson(response: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body, null, 2);
@@ -129,6 +139,76 @@ function readRepoStatus(root: string): {
   };
 }
 
+function currentInspectorProject(root: string): InspectorProjectRoute {
+  const session = readSession(root);
+  const name = session.project_name;
+  return {
+    id: projectIdFromName(name),
+    name,
+    root,
+    registered: false,
+    last_seen_at: session.updated_at
+  };
+}
+
+function registeredInspectorProject(project: RegisteredProject): InspectorProjectRoute {
+  const rootHash = createHash("sha256").update(project.project_root.toLowerCase()).digest("hex").slice(0, 8);
+  return {
+    id: `${projectIdFromName(project.project_name)}-${rootHash}`,
+    name: project.project_name,
+    root: project.project_root,
+    registered: true,
+    last_seen_at: project.last_seen_at
+  };
+}
+
+function inspectorProjects(root: string): InspectorProjectRoute[] {
+  const registered = listProjects();
+  return registered.length ? registered.map(registeredInspectorProject) : [currentInspectorProject(root)];
+}
+
+function findInspectorProject(root: string, projectId: string): InspectorProjectRoute | undefined {
+  const normalized = projectId.toLowerCase();
+  return inspectorProjects(root).find((project) => project.id.toLowerCase() === normalized);
+}
+
+function parseInspectorOptions(url: URL): { maxCharsPerField?: number; includeDiff?: boolean } {
+  const maxCharsParam = url.searchParams.get("max_chars") ?? url.searchParams.get("max_diff_chars");
+  let maxCharsPerField: number | undefined;
+  if (maxCharsParam !== null) {
+    const parsed = Number.parseInt(maxCharsParam, 10);
+    if (!Number.isInteger(parsed) || parsed < 200 || parsed > 50000) {
+      throw new Error("Invalid max_chars. Use an integer from 200 to 50000.");
+    }
+    maxCharsPerField = parsed;
+  }
+
+  const mode = url.searchParams.get("mode");
+  if (mode && !["summary", "standard", "deep", "full"].includes(mode)) {
+    throw new Error("Invalid mode. Use summary, standard, deep, or full.");
+  }
+
+  const includeDiffParam = url.searchParams.get("include_diff");
+  if (includeDiffParam && !["true", "false"].includes(includeDiffParam)) {
+    throw new Error("Invalid include_diff. Use true or false.");
+  }
+
+  return {
+    maxCharsPerField,
+    includeDiff: includeDiffParam === "true" || mode === "deep" || mode === "full"
+  };
+}
+
+function sendProjectNotFound(response: http.ServerResponse): void {
+  sendJson(response, 404, {
+    ok: false,
+    error: {
+      code: "project_not_found",
+      message: "Project is not registered. Run agentbridge projects add first."
+    }
+  });
+}
+
 function writeServerInfo(root: string, info: ServerInfo): void {
   writeJson(bridgePath(root, "server.json"), info);
 }
@@ -216,6 +296,88 @@ export async function startAgentBridgeServer(
             bridgePath(root, "chatgpt_review.md"),
             "No ChatGPT review packet found. Run agentbridge review or POST /review."
           )
+        });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/chatgpt/projects") {
+        const projects = inspectorProjects(root).map((project) => {
+          const git = getGitInfo(project.root, "short");
+          return {
+            id: project.id,
+            name: project.name,
+            root_hint: redactSecrets(project.root),
+            registered: project.registered,
+            branch: git.branch,
+            clean: git.available ? git.changedFiles.length === 0 : false,
+            last_seen: project.last_seen_at
+          };
+        });
+        sendJson(response, 200, { ok: true, projects });
+        return;
+      }
+
+      const inspectorRoute = /^\/chatgpt\/projects\/([^/]+)\/(inspect|codex-changes|review-packet)$/.exec(url.pathname);
+      if (request.method === "GET" && inspectorRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(inspectorRoute[1]);
+        } catch {
+          sendJson(response, 400, {
+            ok: false,
+            error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." }
+          });
+          return;
+        }
+
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+
+        let inspectorOptions: { maxCharsPerField?: number; includeDiff?: boolean };
+        try {
+          inspectorOptions = parseInspectorOptions(url);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(response, 400, { ok: false, error: { code: "invalid_query", message } });
+          return;
+        }
+
+        const commonOptions = {
+          ...inspectorOptions,
+          projectId: project.id,
+          projectName: project.name,
+          registered: project.registered
+        };
+
+        if (inspectorRoute[2] === "inspect") {
+          sendJson(response, 200, createProjectInspectorSnapshot(project.root, commonOptions));
+          return;
+        }
+
+        if (inspectorRoute[2] === "codex-changes") {
+          sendJson(response, 200, createCodexChangesSummary(project.root, commonOptions));
+          return;
+        }
+
+        const snapshot = createProjectInspectorSnapshot(project.root, commonOptions);
+        sendJson(response, 200, {
+          ok: true,
+          project_id: snapshot.project.id,
+          review_packet: {
+            summary: snapshot.codex.review_packet_summary,
+            files_changed: snapshot.codex.changed_file_summary,
+            tests: snapshot.tests.latest_summary,
+            risks: snapshot.safety.risk_flags,
+            questions_for_chatgpt: [
+              "Did Codex satisfy the current user goal?",
+              "Are the tests sufficient for the changed files?",
+              "What should AgentBridge ask Codex to do next?"
+            ]
+          },
+          limits: snapshot.limits
         });
         return;
       }

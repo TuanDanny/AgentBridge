@@ -5,10 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readLocalToken } from "../src/auth.js";
 import { captureProject } from "../src/core.js";
 import { requestJson } from "../src/httpJson.js";
+import { addProject } from "../src/registry.js";
 import { startAgentBridgeServer, type RunningAgentBridgeServer } from "../src/server.js";
 
 const tempRoots: string[] = [];
 const runningServers: RunningAgentBridgeServer[] = [];
+const originalHome = process.env.AGENTBRIDGE_HOME;
 
 function makeTempRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentbridge-server-"));
@@ -16,7 +18,17 @@ function makeTempRoot(): string {
   return root;
 }
 
+function restoreAgentBridgeHome(): void {
+  if (originalHome === undefined) {
+    delete process.env.AGENTBRIDGE_HOME;
+    return;
+  }
+
+  process.env.AGENTBRIDGE_HOME = originalHome;
+}
+
 afterEach(async () => {
+  restoreAgentBridgeHome();
   for (const running of runningServers.splice(0)) {
     await running.close().catch(() => undefined);
   }
@@ -63,6 +75,179 @@ describe("local daemon", () => {
     });
     expect(allowed.status).toBe(200);
     expect(allowed.body).toMatchObject({ ok: true });
+  });
+
+  it("serves project inspector endpoints for the current project when no registry exists", async () => {
+    const registryHome = makeTempRoot();
+    process.env.AGENTBRIDGE_HOME = registryHome;
+    const root = makeTempRoot();
+    captureProject(root, "short");
+    fs.writeFileSync(path.join(root, ".agentbridge", "codex_progress.md"), "Progress with API_TOKEN=abc123.", "utf8");
+    fs.writeFileSync(path.join(root, ".agentbridge", "codex_result.md"), "Result with PASSWORD=hunter2.", "utf8");
+    fs.writeFileSync(path.join(root, ".agentbridge", "chatgpt_review.md"), "Review with SECRET=private.", "utf8");
+    const running = await startAgentBridgeServer(root, { port: 0 });
+    runningServers.push(running);
+    const token = readLocalToken(root);
+
+    const denied = await requestJson({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects"
+    });
+    expect(denied.status).toBe(401);
+
+    const projects = await requestJson<{ ok: boolean; projects: Array<{ id: string; name: string; registered: boolean }> }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects",
+      token
+    });
+    expect(projects.status).toBe(200);
+    expect(projects.body.ok).toBe(true);
+    expect(projects.body.projects).toHaveLength(1);
+    expect(projects.body.projects[0].name).toBe(path.basename(root));
+    expect(projects.body.projects[0].registered).toBe(false);
+
+    const projectId = encodeURIComponent(projects.body.projects[0].id);
+    for (const route of ["inspect", "codex-changes", "review-packet"]) {
+      const protectedResponse = await requestJson({
+        host: running.info.host,
+        port: running.info.port,
+        path: `/chatgpt/projects/${projectId}/${route}`
+      });
+      expect(protectedResponse.status).toBe(401);
+    }
+
+    const inspect = await requestJson<{
+      ok: boolean;
+      project: { id: string };
+      repo: { branch: string };
+      codex: { progress_summary: string };
+      agentbridge: { next_action: string };
+    }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: `/chatgpt/projects/${projectId}/inspect`,
+      token
+    });
+    expect(inspect.status).toBe(200);
+    expect(inspect.body.project.id).toBe(projects.body.projects[0].id);
+    expect(inspect.body.repo.branch).toBeDefined();
+    expect(inspect.body.agentbridge.next_action).toBe("create_codex_prompt");
+    expect(inspect.body.codex.progress_summary).toContain("[REDACTED]");
+    expect(inspect.body.codex.progress_summary).not.toContain("abc123");
+
+    const changes = await requestJson<{ ok: boolean; codex_progress: string; codex_result: string; changed_files: unknown[] }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: `/chatgpt/projects/${projectId}/codex-changes`,
+      token
+    });
+    expect(changes.status).toBe(200);
+    expect(changes.body.ok).toBe(true);
+    expect(changes.body.codex_progress).toContain("[REDACTED]");
+    expect(changes.body.codex_result).toContain("[REDACTED]");
+    expect(changes.body.codex_result).not.toContain("hunter2");
+    expect(Array.isArray(changes.body.changed_files)).toBe(true);
+
+    const review = await requestJson<{ ok: boolean; review_packet: { summary: string; files_changed: unknown[] } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: `/chatgpt/projects/${projectId}/review-packet`,
+      token
+    });
+    expect(review.status).toBe(200);
+    expect(review.body.ok).toBe(true);
+    expect(review.body.review_packet.summary).toContain("[REDACTED]");
+    expect(review.body.review_packet.summary).not.toContain("private");
+    expect(Array.isArray(review.body.review_packet.files_changed)).toBe(true);
+  });
+
+  it("returns a safe 404 for unknown project inspector ids", async () => {
+    const registryHome = makeTempRoot();
+    process.env.AGENTBRIDGE_HOME = registryHome;
+    const root = makeTempRoot();
+    const running = await startAgentBridgeServer(root, { port: 0 });
+    runningServers.push(running);
+
+    const unknown = await requestJson<{ ok: boolean; error: { code: string; message: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/not-registered/inspect",
+      token: readLocalToken(root)
+    });
+
+    expect(unknown.status).toBe(404);
+    expect(unknown.body.ok).toBe(false);
+    expect(unknown.body.error.code).toBe("project_not_found");
+    expect(unknown.body.error.message).toContain("agentbridge projects add");
+  });
+
+  it("routes project inspector requests through the registry when projects are registered", async () => {
+    const registryHome = makeTempRoot();
+    process.env.AGENTBRIDGE_HOME = registryHome;
+    const serverRoot = makeTempRoot();
+    const registeredRoot = makeTempRoot();
+    captureProject(registeredRoot, "short");
+    fs.writeFileSync(path.join(registeredRoot, ".agentbridge", "codex_result.md"), "Registered result.", "utf8");
+    addProject(registeredRoot);
+    const running = await startAgentBridgeServer(serverRoot, { port: 0 });
+    runningServers.push(running);
+    const token = readLocalToken(serverRoot);
+
+    const projects = await requestJson<{ ok: boolean; projects: Array<{ id: string; name: string; registered: boolean }> }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects",
+      token
+    });
+    expect(projects.status).toBe(200);
+    expect(projects.body.projects).toHaveLength(1);
+    expect(projects.body.projects[0].name).toBe(path.basename(registeredRoot));
+    expect(projects.body.projects[0].registered).toBe(true);
+
+    const inspect = await requestJson<{ ok: boolean; project: { name: string; registered: boolean }; codex: { result_summary: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: `/chatgpt/projects/${encodeURIComponent(projects.body.projects[0].id)}/inspect`,
+      token
+    });
+    expect(inspect.status).toBe(200);
+    expect(inspect.body.project.name).toBe(path.basename(registeredRoot));
+    expect(inspect.body.project.registered).toBe(true);
+    expect(inspect.body.codex.result_summary).toContain("Registered result.");
+  });
+
+  it("uses distinct safe ids for registered projects with the same name", async () => {
+    const registryHome = makeTempRoot();
+    process.env.AGENTBRIDGE_HOME = registryHome;
+    const serverRoot = makeTempRoot();
+    const parentA = makeTempRoot();
+    const parentB = makeTempRoot();
+    const projectA = path.join(parentA, "same-project");
+    const projectB = path.join(parentB, "same-project");
+    fs.mkdirSync(projectA);
+    fs.mkdirSync(projectB);
+    captureProject(projectA, "short");
+    captureProject(projectB, "short");
+    addProject(projectA);
+    addProject(projectB);
+    const running = await startAgentBridgeServer(serverRoot, { port: 0 });
+    runningServers.push(running);
+
+    const projects = await requestJson<{ projects: Array<{ id: string; name: string }> }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects",
+      token: readLocalToken(serverRoot)
+    });
+
+    expect(projects.status).toBe(200);
+    expect(projects.body.projects).toHaveLength(2);
+    expect(projects.body.projects.every((project) => project.name === "same-project")).toBe(true);
+    expect(new Set(projects.body.projects.map((project) => project.id)).size).toBe(2);
+    expect(projects.body.projects.some((project) => project.id.includes(projectA))).toBe(false);
+    expect(projects.body.projects.some((project) => project.id.includes(projectB))).toBe(false);
   });
 
   it("serves ChatGPT bridge read endpoints with token and redacts context", async () => {

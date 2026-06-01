@@ -29,6 +29,13 @@ import type { ApprovalStatus, RiskLevel } from "./types.js";
 import { addProject, listProjects, registryPath, removeProject } from "./registry.js";
 import { createPairingInfo } from "./pairing.js";
 import { formatTunnelTestResult, registerTunnel, testTunnel, tunnelGuide, tunnelStatus } from "./tunnel.js";
+import {
+  createCodexChangesSummary,
+  createProjectInspectPacket,
+  createProjectInspectorSnapshot,
+  formatCodexChangesHuman,
+  formatInspectorHuman
+} from "./inspector.js";
 
 function printResult(result: { message: string; bridgeDir: string; changedFiles: string[] }): void {
   console.log(result.message);
@@ -102,6 +109,38 @@ program
   .action(() => {
     try {
       printResult(createChatGptReview());
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+program
+  .command("inspect")
+  .description("Inspect the current project for ChatGPT-readable status.")
+  .option("--json", "print the full JSON inspector snapshot")
+  .option("--for-chatgpt", "write .agentbridge/project_inspect_packet.md")
+  .option("--changes", "focus on changed files and Codex progress/result")
+  .option("--project <projectId>", "reserved project id for future project-aware routing")
+  .action((options: { json?: boolean; forChatgpt?: boolean; changes?: boolean; project?: string }) => {
+    try {
+      if (options.project) {
+        console.error("agentbridge: --project is reserved for v0.4-beta project registry routing; inspecting current project.");
+      }
+
+      if (options.forChatgpt) {
+        const packet = createProjectInspectPacket(process.cwd());
+        console.log(`Created ChatGPT inspect packet: ${packet.path}`);
+        return;
+      }
+
+      if (options.changes) {
+        const changes = createCodexChangesSummary(process.cwd());
+        console.log(options.json ? JSON.stringify(changes, null, 2) : formatCodexChangesHuman(changes));
+        return;
+      }
+
+      const snapshot = createProjectInspectorSnapshot(process.cwd());
+      console.log(options.json ? JSON.stringify(snapshot, null, 2) : formatInspectorHuman(snapshot));
     } catch (error) {
       handleError(error);
     }

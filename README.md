@@ -80,6 +80,7 @@ AgentBridge creates:
   group_handoff.md
   group_decision.md
   remote_bridge.json
+  project_inspect_packet.md
   next_action.md
   approvals.json
   approval_queue.jsonl
@@ -259,6 +260,52 @@ Streamable HTTP MCP is deferred. AgentBridge does not claim a working `/mcp` HTT
 Use the verified STDIO MCP path for MCP clients. Future HTTP MCP work must use a real MCP SDK Streamable HTTP transport with token auth and protocol-level tests.
 
 See `STREAMABLE_HTTP_MCP.md` and `HTTP_MCP_ACCEPTANCE.md` for the deferred status.
+
+## v0.4 Project Inspector
+
+AgentBridge can create a redacted, truncated project inspector snapshot for ChatGPT-readable local project status. This is Level 3 read/understand capability, not an autonomous Codex loop.
+
+Commands:
+
+```text
+agentbridge inspect
+agentbridge inspect --json
+agentbridge inspect --for-chatgpt
+agentbridge inspect --changes
+```
+
+The inspector includes repo state, changed files, AgentBridge session state, ChatGPT plan summary, Codex progress/result summaries, latest test summary when present, and pending approval count.
+
+`agentbridge inspect --for-chatgpt` writes `.agentbridge/project_inspect_packet.md`.
+
+Project-aware HTTP endpoints are available through the existing token-protected JSON bridge:
+
+```text
+GET /chatgpt/projects
+GET /chatgpt/projects/:projectId/inspect
+GET /chatgpt/projects/:projectId/codex-changes
+GET /chatgpt/projects/:projectId/review-packet
+```
+
+When the local project registry is empty, the HTTP bridge exposes only the current project as the default project. It does not accept arbitrary raw filesystem paths.
+
+This is not HTTP MCP and does not add `/mcp`.
+
+v0.4-gamma adds a ChatGPT Tool Adapter spec for compatible HTTP tool/action clients:
+
+```text
+openapi.agentbridge.json
+```
+
+The spec uses a placeholder server URL, `https://YOUR-TUNNEL-URL.example`, and bearer auth. It does not include a real local token and does not require an API key. ChatGPT direct use depends on whether the current client/tool can import the spec, reach the HTTPS tunnel, and attach the bearer token securely.
+
+Fallback remains:
+
+```text
+agentbridge inspect --for-chatgpt
+```
+
+See `INSPECTOR.md` and `CHATGPT_TOOL_ADAPTER.md` for usage and safety details.
 
 ## Phase 4 Safety And Approvals
 

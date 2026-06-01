@@ -113,4 +113,17 @@ describe("compiled CLI smoke tests", () => {
     expect(status).toContain("Token value: hidden");
     expect(remote).not.toContain("local_token");
   });
+
+  it("supports project inspector CLI output modes", () => {
+    const root = makeTempRoot("agentbridge-cli-inspect-");
+
+    expect(runCli(root, "inspect")).toContain("AgentBridge Project Inspector");
+    const json = JSON.parse(runCli(root, "inspect", "--json"));
+    expect(json.ok).toBe(true);
+    expect(json.project.name).toBe(path.basename(root));
+
+    expect(runCli(root, "inspect", "--changes")).toContain("AgentBridge Codex Changes");
+    expect(runCli(root, "inspect", "--for-chatgpt")).toContain("project_inspect_packet.md");
+    expect(fs.existsSync(path.join(root, ".agentbridge", "project_inspect_packet.md"))).toBe(true);
+  });
 });
