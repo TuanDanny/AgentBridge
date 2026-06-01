@@ -16,6 +16,13 @@ import {
   runCodexPrompt
 } from "./codexAdapter.js";
 import { probeServer, stopServer } from "./daemonClient.js";
+import {
+  applyGroupDecision,
+  createGroupBrief,
+  createGroupDecisionTemplate,
+  createGroupHandoff,
+  getGroupStatus
+} from "./group.js";
 import { classifyCommand, createApproval, listApprovals, resolveApproval } from "./safety.js";
 import { startAgentBridgeServer } from "./server.js";
 import type { ApprovalStatus, RiskLevel } from "./types.js";
@@ -198,6 +205,63 @@ safety
   .action((commandParts: string[]) => {
     const command = commandParts.join(" ");
     console.log(JSON.stringify(classifyCommand(command), null, 2));
+  });
+
+const group = program.command("group").description("Create safe group-chat coordination files.");
+
+group
+  .command("brief")
+  .description("Create .agentbridge/group_brief.md for ChatGPT group chat coordination.")
+  .action(() => {
+    try {
+      printResult(createGroupBrief());
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+group
+  .command("handoff")
+  .description("Create .agentbridge/group_handoff.md for group review of Codex results.")
+  .action(() => {
+    try {
+      printResult(createGroupHandoff());
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+group
+  .command("decision-template")
+  .description("Create .agentbridge/group_decision.md for a group decision.")
+  .action(() => {
+    try {
+      printResult(createGroupDecisionTemplate());
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+group
+  .command("apply-decision")
+  .description("Apply .agentbridge/group_decision.md to the shared AgentBridge plan and Codex prompt.")
+  .action(() => {
+    try {
+      printResult(applyGroupDecision());
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+group
+  .command("status")
+  .description("Print group companion file status and next recommended step.")
+  .action(() => {
+    try {
+      console.log(getGroupStatus());
+    } catch (error) {
+      handleError(error);
+    }
   });
 
 const approvals = program.command("approvals").description("Manage local approval requests.");

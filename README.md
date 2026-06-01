@@ -76,6 +76,9 @@ AgentBridge creates:
   codex_progress.md
   codex_result.md
   chatgpt_review.md
+  group_brief.md
+  group_handoff.md
+  group_decision.md
   next_action.md
   approvals.json
   approval_queue.jsonl
@@ -194,6 +197,32 @@ POST /chatgpt/request-approval
 ```
 
 See `CHATGPT_WEB_BRIDGE.md` for usage, security notes, and manual curl checks.
+
+## v0.3-alpha Group Chat Companion
+
+AgentBridge can create redacted Markdown packets for ChatGPT group chat coordination. Group chat is only a coordination layer; AgentBridge remains the source of truth.
+
+Commands:
+
+```text
+agentbridge group brief
+agentbridge group handoff
+agentbridge group decision-template
+agentbridge group apply-decision
+agentbridge group status
+```
+
+Generated files:
+
+```text
+.agentbridge/group_brief.md
+.agentbridge/group_handoff.md
+.agentbridge/group_decision.md
+```
+
+`group apply-decision` reads the local decision file, redacts secret-like values, updates `chatgpt_plan.md` and `next_action.md`, regenerates `codex_prompt.md`, and records `group.apply_decision` in the audit log. It does not run Codex.
+
+See `GROUP_CHAT_COMPANION.md` for the workflow and safety notes.
 
 ## Phase 4 Safety And Approvals
 

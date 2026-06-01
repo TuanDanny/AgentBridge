@@ -82,4 +82,17 @@ describe("compiled CLI smoke tests", () => {
     expect(output).toContain("Dry run: codex-test");
     expect(fs.existsSync(path.join(root, ".agentbridge", "codex_prompt.md"))).toBe(true);
   });
+
+  it("supports group companion CLI commands", () => {
+    const root = makeTempRoot("agentbridge-cli-group-");
+
+    expect(runCli(root, "group", "brief")).toContain("group_brief.md");
+    expect(runCli(root, "group", "handoff")).toContain("group_handoff.md");
+    expect(runCli(root, "group", "decision-template")).toContain("group_decision.md");
+    const status = runCli(root, "group", "status");
+
+    expect(status).toContain("Group brief exists: yes");
+    expect(status).toContain("Group handoff exists: yes");
+    expect(status).toContain("Group decision exists: yes");
+  });
 });
