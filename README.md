@@ -252,6 +252,14 @@ Do not share `.agentbridge/local_token`. Do not commit `.agentbridge/remote_brid
 
 See `SECURE_TUNNEL_BRIDGE.md` for setup steps and security notes.
 
+## v0.3-gamma Streamable HTTP MCP
+
+Streamable HTTP MCP is deferred. AgentBridge does not claim a working `/mcp` HTTP endpoint, and `/chatgpt/*` remains a custom JSON bridge rather than MCP protocol.
+
+Use the verified STDIO MCP path for MCP clients. Future HTTP MCP work must use a real MCP SDK Streamable HTTP transport with token auth and protocol-level tests.
+
+See `STREAMABLE_HTTP_MCP.md` and `HTTP_MCP_ACCEPTANCE.md` for the deferred status.
+
 ## Phase 4 Safety And Approvals
 
 Classify a command without running it:
