@@ -2,10 +2,11 @@
 
 ## Status
 
-v0.4-gamma adds an OpenAPI adapter spec for compatible HTTP tool/action clients:
+v0.4-gamma adds OpenAPI adapter specs for compatible HTTP tool/action clients:
 
 ```text
 openapi.agentbridge.json
+openapi.agentbridge.gpt-actions.json
 ```
 
 This is not Streamable HTTP MCP. AgentBridge still does not expose or claim a working `/mcp` HTTP endpoint.
@@ -21,7 +22,7 @@ GET /chatgpt/projects/:projectId/codex-changes
 GET /chatgpt/projects/:projectId/review-packet
 ```
 
-A compatible HTTP tool, action, or client can import `openapi.agentbridge.json`, replace the server URL placeholder with a real HTTPS tunnel URL, and call the endpoints with bearer token auth.
+A compatible HTTP tool, action, or client can import an AgentBridge OpenAPI schema, replace the server URL placeholder with a real HTTPS tunnel URL, and call the endpoints with bearer token auth.
 
 ## Start AgentBridge
 
@@ -88,19 +89,29 @@ The adapter does not require `OPENAI_API_KEY`, `CODEX_API_KEY`, or any other API
 
 ## Import The OpenAPI Spec
 
-Use:
+For ChatGPT GPT Actions, use:
+
+```text
+openapi.agentbridge.gpt-actions.json
+```
+
+This schema inlines every operation parameter because GPT Actions may reject `$ref` entries inside `parameters`.
+
+For other OpenAPI-compatible clients that accept parameter references, the canonical schema remains:
 
 ```text
 openapi.agentbridge.json
 ```
 
-Before importing it into a compatible client, replace:
+Before importing either schema into a compatible client, replace:
 
 ```text
 https://YOUR-TUNNEL-URL.example
 ```
 
 with your registered HTTPS tunnel URL.
+
+In GPT Actions, configure authentication as bearer token auth and provide the local AgentBridge token through the GPT Actions authentication UI. Do not paste the token into the schema file.
 
 The spec defines these operation IDs:
 
@@ -146,4 +157,4 @@ The packet is redacted and truncated by AgentBridge, but you should still inspec
 
 `/chatgpt/*` is a custom JSON bridge. It is not MCP protocol.
 
-Streamable HTTP MCP remains deferred until AgentBridge implements a real MCP SDK transport with protocol-level tests. Do not treat `openapi.agentbridge.json` as an MCP schema.
+Streamable HTTP MCP remains deferred until AgentBridge implements a real MCP SDK transport with protocol-level tests. Do not treat either OpenAPI schema as an MCP schema.

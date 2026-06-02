@@ -1,0 +1,417 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AgentBridge GPT Actions Project Inspector",
+    "version": "0.4.0-gamma",
+    "description": "GPT Actions compatible OpenAPI schema for AgentBridge Project Inspector JSON endpoints. This is not MCP and does not define a /mcp endpoint."
+  },
+  "servers": [
+    {
+      "url": "https://YOUR-TUNNEL-URL.example",
+      "description": "Replace with the current HTTPS tunnel URL for your local AgentBridge daemon."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/chatgpt/projects": {
+      "get": {
+        "operationId": "listProjects",
+        "summary": "List AgentBridge projects",
+        "description": "Returns registered AgentBridge projects, or the current local project when no registry entries exist.",
+        "responses": {
+          "200": {
+            "description": "Project list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "projects"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "projects": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "root_hint": {
+                            "type": "string"
+                          },
+                          "registered": {
+                            "type": "boolean"
+                          },
+                          "branch": {
+                            "type": "string"
+                          },
+                          "clean": {
+                            "type": "boolean"
+                          },
+                          "last_seen": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      }
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/inspect": {
+      "get": {
+        "operationId": "inspectProject",
+        "summary": "Inspect one AgentBridge project",
+        "description": "Returns a redacted Project Inspector snapshot for the requested project ID.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe AgentBridge project ID returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "description": "Inspection detail level.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "summary",
+                "standard",
+                "deep",
+                "full"
+              ]
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "description": "Maximum characters per large text field. Server accepts 200 to 50000.",
+            "schema": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 50000
+            }
+          },
+          {
+            "name": "include_diff",
+            "in": "query",
+            "required": false,
+            "description": "Whether to include fuller diff context when supported by the inspector.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project inspector snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "project",
+                    "repo",
+                    "agentbridge",
+                    "codex",
+                    "tests",
+                    "safety",
+                    "limits"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "project": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "repo": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "agentbridge": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "codex": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "tests": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "safety": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "limits": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project ID is not registered or available as the default current project"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/codex-changes": {
+      "get": {
+        "operationId": "getCodexChanges",
+        "summary": "Get Codex changes for one project",
+        "description": "Returns changed file summaries, diff summary, Codex progress, and Codex result text after AgentBridge redaction and truncation.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe AgentBridge project ID returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "description": "Inspection detail level.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "summary",
+                "standard",
+                "deep",
+                "full"
+              ]
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "description": "Maximum characters per large text field. Server accepts 200 to 50000.",
+            "schema": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 50000
+            }
+          },
+          {
+            "name": "include_diff",
+            "in": "query",
+            "required": false,
+            "description": "Whether to include fuller diff context when supported by the inspector.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Codex changes summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "project_id",
+                    "changed_files",
+                    "codex_progress",
+                    "codex_result",
+                    "limits"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "project_id": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    },
+                    "clean": {
+                      "type": "boolean"
+                    },
+                    "changed_files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "diff_summary": {
+                      "type": "string"
+                    },
+                    "codex_progress": {
+                      "type": "string"
+                    },
+                    "codex_result": {
+                      "type": "string"
+                    },
+                    "limits": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project ID is not registered or available as the default current project"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/review-packet": {
+      "get": {
+        "operationId": "getReviewPacket",
+        "summary": "Get a ChatGPT review packet for one project",
+        "description": "Returns a redacted review packet derived from the Project Inspector snapshot.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe AgentBridge project ID returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "description": "Inspection detail level.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "summary",
+                "standard",
+                "deep",
+                "full"
+              ]
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "description": "Maximum characters per large text field. Server accepts 200 to 50000.",
+            "schema": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 50000
+            }
+          },
+          {
+            "name": "include_diff",
+            "in": "query",
+            "required": false,
+            "description": "Whether to include fuller diff context when supported by the inspector.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review packet summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "project_id",
+                    "review_packet",
+                    "limits"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "project_id": {
+                      "type": "string"
+                    },
+                    "review_packet": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "limits": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project ID is not registered or available as the default current project"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {},
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "AgentBridge local token",
+        "description": "Use the local AgentBridge bearer token. Do not publish, commit, or paste the token into this schema."
+      }
+    }
+  }
+}
