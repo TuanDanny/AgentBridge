@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AgentBridge ChatGPT Tool Adapter",
-    "version": "0.4.0-gamma",
-    "description": "OpenAPI adapter for AgentBridge Project Inspector JSON endpoints. This is not MCP and does not define a /mcp endpoint."
+    "version": "0.5.0-delta",
+    "description": "OpenAPI adapter for AgentBridge Project Inspector and safe project browser JSON endpoints. This is not MCP and does not define a /mcp endpoint."
   },
   "servers": [
     {
@@ -21,7 +21,7 @@
       "get": {
         "operationId": "listProjects",
         "summary": "List AgentBridge projects available to the local bridge",
-        "description": "Returns registered projects, or the current local project when no registry entries exist.",
+        "description": "List registered CodexLink projects for the project picker. Returns registry mode, branch, status, root hints, and fallback current project when no registry exists.",
         "responses": {
           "200": {
             "description": "Project list",
@@ -39,11 +39,545 @@
         }
       }
     },
+    "/chatgpt/active-project": {
+      "get": {
+        "operationId": "getActiveProject",
+        "summary": "Get active project",
+        "description": "Return the active selected CodexLink project. If none is selected, call listProjects and ask the user to choose.",
+        "responses": {
+          "200": {
+            "description": "Get active project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "active_project": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": true
+                    },
+                    "next_action": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/tree": {
+      "get": {
+        "operationId": "getProjectTree",
+        "summary": "Get project tree",
+        "description": "Return a safe limited tree for one CodexLink project by projectId from listProjects. Counts files/folders, applies ignores, and returns project-relative paths.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "description": "Maximum traversal depth.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          },
+          {
+            "name": "max_entries",
+            "in": "query",
+            "required": false,
+            "description": "Maximum entries returned.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000
+            }
+          },
+          {
+            "name": "include_hidden",
+            "in": "query",
+            "required": false,
+            "description": "Include hidden files except blocked secrets.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_sizes",
+            "in": "query",
+            "required": false,
+            "description": "Include file sizes.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Get project tree",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "project_id": {
+                      "type": "string"
+                    },
+                    "root_hint": {
+                      "type": "string"
+                    },
+                    "max_depth": {
+                      "type": "integer"
+                    },
+                    "max_entries": {
+                      "type": "integer"
+                    },
+                    "total_files": {
+                      "type": "integer"
+                    },
+                    "total_folders": {
+                      "type": "integer"
+                    },
+                    "returned_entries": {
+                      "type": "integer"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    },
+                    "ignored_dirs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project not found or path not available"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/files/search": {
+      "get": {
+        "operationId": "searchProjectFiles",
+        "summary": "Search project files",
+        "description": "Search file names and project-relative paths in one CodexLink project. Use projectId from listProjects. Does not read file contents.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "File name or project-relative path query.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "description": "Maximum matches returned.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "description": "Maximum traversal depth.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          },
+          {
+            "name": "case_sensitive",
+            "in": "query",
+            "required": false,
+            "description": "Use case-sensitive matching.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search project files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "project_id": {
+                      "type": "string"
+                    },
+                    "query": {
+                      "type": "string"
+                    },
+                    "matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project not found or path not available"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/file": {
+      "get": {
+        "operationId": "readProjectFile",
+        "summary": "Read project file",
+        "description": "Read one safe text file by project-relative path in a CodexLink project. Rejects absolute paths, traversal, secret files, binary files, and oversized files.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "Project-relative path. Cannot be absolute or traversal.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "description": "Maximum returned content characters.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50000
+            }
+          },
+          {
+            "name": "start_line",
+            "in": "query",
+            "required": false,
+            "description": "Optional 1-based start line.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "num_lines",
+            "in": "query",
+            "required": false,
+            "description": "Optional number of lines.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read project file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "project_id": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "integer"
+                    },
+                    "encoding": {
+                      "type": "string"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    },
+                    "redacted": {
+                      "type": "boolean"
+                    },
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project not found or path not available"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/grep": {
+      "get": {
+        "operationId": "searchProjectText",
+        "summary": "Search project text",
+        "description": "Search text inside safe project files. Use projectId from listProjects. Returns redacted snippets and skips ignored, secret, binary, and large files.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Text query to search for.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_matches",
+            "in": "query",
+            "required": false,
+            "description": "Maximum matches returned.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "max_file_size",
+            "in": "query",
+            "required": false,
+            "description": "Maximum file size to search.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "description": "Maximum traversal depth.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          },
+          {
+            "name": "case_sensitive",
+            "in": "query",
+            "required": false,
+            "description": "Use case-sensitive matching.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search project text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "project_id": {
+                      "type": "string"
+                    },
+                    "query": {
+                      "type": "string"
+                    },
+                    "matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    },
+                    "redacted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project not found or path not available"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/select": {
+      "post": {
+        "operationId": "selectProject",
+        "summary": "Select active project",
+        "description": "Select one registered CodexLink project as active. Use projectId from listProjects. Stores local metadata only and does not execute code.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Select active project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "active_project": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project not found or path not available"
+          }
+        }
+      }
+    },
     "/chatgpt/projects/{projectId}/inspect": {
       "get": {
         "operationId": "inspectProject",
         "summary": "Inspect one AgentBridge project",
-        "description": "Returns a redacted Project Inspector snapshot for a registered project ID, or for the current default project when no registry exists.",
+        "description": "Inspect one CodexLink project by safe projectId from listProjects. Returns repo state, changed files, commits, tags, session state, tests, and safety flags.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectId"
@@ -82,7 +616,7 @@
       "get": {
         "operationId": "getCodexChanges",
         "summary": "Get Codex changes for one project",
-        "description": "Returns changed file summaries, diff summary, Codex progress, and Codex result text after AgentBridge redaction and truncation.",
+        "description": "Get Codex change summary for one registered project. Use projectId from listProjects. Returns changed files, diff summary, and related project context.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectId"
@@ -121,7 +655,7 @@
       "get": {
         "operationId": "getReviewPacket",
         "summary": "Get a ChatGPT review packet for one project",
-        "description": "Returns a redacted review packet derived from the Project Inspector snapshot.",
+        "description": "Get a technical review packet for one registered project. Includes repo status, Codex progress, tests, safety risks, and recommended next steps.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectId"
@@ -264,12 +798,20 @@
         "type": "object",
         "required": [
           "ok",
+          "mode",
           "projects"
         ],
         "properties": {
           "ok": {
             "type": "boolean",
             "const": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "registry",
+              "current_project_fallback"
+            ]
           },
           "projects": {
             "type": "array",
@@ -300,6 +842,9 @@
             "description": "Redacted local path hint."
           },
           "registered": {
+            "type": "boolean"
+          },
+          "git_available": {
             "type": "boolean"
           },
           "branch": {

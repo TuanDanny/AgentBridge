@@ -21,6 +21,8 @@
     "HTTP_MCP_ACCEPTANCE.md",
     "INSPECTOR.md",
     "INSPECTOR_ACCEPTANCE.md",
+    "PROJECT_REGISTRY.md",
+    "CODEXLINK_GPT_INSTRUCTIONS.md",
     "CHATGPT_TOOL_ADAPTER.md",
     "openapi.agentbridge.json",
     "openapi.agentbridge.gpt-actions.json",

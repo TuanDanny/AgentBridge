@@ -11,8 +11,13 @@ function runGit(root: string, args: string[]): { ok: boolean; stdout: string; st
 
   return {
     ok: result.status === 0,
-    stdout: result.stdout.trimEnd(),
-    stderr: result.stderr.trimEnd()
+    stdout: typeof result.stdout === "string" ? result.stdout.trimEnd() : "",
+    stderr:
+      typeof result.stderr === "string" && result.stderr
+        ? result.stderr.trimEnd()
+        : result.error instanceof Error
+          ? result.error.message
+          : ""
   };
 }
 

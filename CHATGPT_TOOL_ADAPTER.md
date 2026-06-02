@@ -2,7 +2,7 @@
 
 ## Status
 
-v0.4-gamma adds OpenAPI adapter specs for compatible HTTP tool/action clients:
+v0.5-delta updates the OpenAPI adapter specs for compatible HTTP tool/action clients:
 
 ```text
 openapi.agentbridge.json
@@ -13,16 +13,24 @@ This is not Streamable HTTP MCP. AgentBridge still does not expose or claim a wo
 
 ## Purpose
 
-The adapter describes the Project Inspector HTTP endpoints added in v0.4-beta:
+The adapter describes the Project Inspector and safe project browser HTTP endpoints:
 
 ```text
 GET /chatgpt/projects
+GET /chatgpt/active-project
 GET /chatgpt/projects/:projectId/inspect
 GET /chatgpt/projects/:projectId/codex-changes
 GET /chatgpt/projects/:projectId/review-packet
+GET /chatgpt/projects/:projectId/tree
+GET /chatgpt/projects/:projectId/files/search
+GET /chatgpt/projects/:projectId/file
+GET /chatgpt/projects/:projectId/grep
+POST /chatgpt/projects/:projectId/select
 ```
 
 A compatible HTTP tool, action, or client can import an AgentBridge OpenAPI schema, replace the server URL placeholder with a real HTTPS tunnel URL, and call the endpoints with bearer token auth.
+
+After v0.5 registry setup, `listProjects` can return multiple registered local projects. A GPT should call `listProjects` first, show a project picker, call `selectProject` after the user chooses, and then inspect or browse only the selected project.
 
 ## Start AgentBridge
 
@@ -120,9 +128,32 @@ listProjects
 inspectProject
 getCodexChanges
 getReviewPacket
+getProjectTree
+searchProjectFiles
+readProjectFile
+searchProjectText
+selectProject
+getActiveProject
 ```
 
-The client should first call `listProjects`, then pass a returned `projectId` into the project-specific operations. Raw filesystem paths are not accepted by the HTTP endpoints.
+The client should first call `listProjects`, then pass a returned `projectId` into the project-specific operations. Raw filesystem paths are not accepted by the HTTP endpoints. File reads use project-relative paths only; absolute paths, traversal, sensitive files, binary files, and oversized reads are rejected or limited.
+
+Suggested GPT starter:
+
+```text
+Start CodexLink and show my available projects.
+```
+
+Suggested GPT behavior:
+
+```text
+1. Call listProjects first.
+2. Show a table with project id, branch, status, registration state, and root hint.
+3. Ask the user to choose by number or projectId.
+4. Call selectProject for the chosen project.
+5. Inspect, browse, search, or read only the selected project.
+6. Do not inspect every project by default.
+```
 
 ## ChatGPT Direct Use
 
@@ -132,7 +163,7 @@ ChatGPT direct use depends on whether the current ChatGPT client, action system,
 - import an OpenAPI schema
 - reach the HTTPS tunnel URL
 - attach the bearer token securely
-- send requests to the Project Inspector endpoints
+- send requests to the Project Inspector and safe browser endpoints
 ```
 
 This repository does not add cloud/team/account mode. It only provides a local-first HTTP adapter spec for clients that already support this style of tool/action integration.
@@ -158,3 +189,5 @@ The packet is redacted and truncated by AgentBridge, but you should still inspec
 `/chatgpt/*` is a custom JSON bridge. It is not MCP protocol.
 
 Streamable HTTP MCP remains deferred until AgentBridge implements a real MCP SDK transport with protocol-level tests. Do not treat either OpenAPI schema as an MCP schema.
+
+There is no HTTP scan endpoint. Safe project discovery remains CLI-only.

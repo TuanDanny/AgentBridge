@@ -26,9 +26,39 @@ import {
 import { classifyCommand, createApproval, listApprovals, resolveApproval } from "./safety.js";
 import { startAgentBridgeServer } from "./server.js";
 import type { ApprovalStatus, RiskLevel } from "./types.js";
-import { addProject, listProjects, registryPath, removeProject } from "./registry.js";
+import {
+  addProject,
+  findProject,
+  formatProjectList,
+  listProjects,
+  projectIdFromRoot,
+  registerCurrentProject,
+  registerProject,
+  registryPath,
+  removeProject
+} from "./registry.js";
 import { createPairingInfo } from "./pairing.js";
 import { formatTunnelTestResult, registerTunnel, testTunnel, tunnelGuide, tunnelStatus } from "./tunnel.js";
+import {
+  discoverProjects,
+  formatProjectScanResult,
+  normalizeDiscoverOptions,
+  parseScanSelection,
+  validateScanRoot,
+  type ProjectNameStyle,
+  type ProjectScanResult
+} from "./discovery.js";
+import {
+  formatProjectFileRead,
+  formatProjectFileSearch,
+  formatProjectTextSearch,
+  formatProjectTree,
+  getProjectTree,
+  readProjectFile,
+  searchProjectFiles,
+  searchProjectText
+} from "./projectFiles.js";
+import { clearActiveProject, readActiveProject, selectActiveProject } from "./activeProject.js";
 import {
   createCodexChangesSummary,
   createProjectInspectPacket,
@@ -120,11 +150,11 @@ program
   .option("--json", "print the full JSON inspector snapshot")
   .option("--for-chatgpt", "write .agentbridge/project_inspect_packet.md")
   .option("--changes", "focus on changed files and Codex progress/result")
-  .option("--project <projectId>", "reserved project id for future project-aware routing")
+  .option("--project <projectId>", "deprecated; use `agentbridge project inspect <id>`")
   .action((options: { json?: boolean; forChatgpt?: boolean; changes?: boolean; project?: string }) => {
     try {
       if (options.project) {
-        console.error("agentbridge: --project is reserved for v0.4-beta project registry routing; inspecting current project.");
+        console.error("agentbridge: use `agentbridge project inspect <id>` for registered projects; inspecting current project.");
       }
 
       if (options.forChatgpt) {
@@ -145,6 +175,41 @@ program
       handleError(error);
     }
   });
+
+function printRegisteredProject(project: unknown): void {
+  console.log(JSON.stringify(project, null, 2));
+}
+
+function parseNonNegativeIntegerOption(value: string, optionName: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${optionName} must be an integer.`);
+  }
+  return Number.parseInt(value, 10);
+}
+
+function parseProjectNameStyle(value: string): ProjectNameStyle {
+  if (value !== "folder" && value !== "package" && value !== "git") {
+    throw new Error("name-style must be folder, package, or git.");
+  }
+  return value;
+}
+
+function resolveCliProject(id: string): { root: string; projectId: string; projectName?: string; registered: boolean } {
+  const registeredProjects = listProjects(process.cwd());
+  const registered = registeredProjects.length ? findProject(process.cwd(), id) : undefined;
+  const fallbackId = projectIdFromRoot(process.cwd());
+  const fallbackAllowed = !registeredProjects.length && id.toLowerCase() === fallbackId.toLowerCase();
+  if (!registered && !fallbackAllowed) {
+    throw new Error("Project is not registered.");
+  }
+
+  return {
+    root: registered?.root ?? process.cwd(),
+    projectId: registered?.id ?? fallbackId,
+    ...(registered?.name ? { projectName: registered.name } : {}),
+    registered: Boolean(registered)
+  };
+}
 
 program
   .command("start")
@@ -401,22 +466,311 @@ approvals
     }
   });
 
-const projects = program.command("projects").description("Manage the AgentBridge multi-project registry.");
+const project = program.command("project").description("Manage the local AgentBridge project registry.");
+
+project
+  .command("register")
+  .description("Register an explicitly allowed local project.")
+  .argument("<id>", "safe project id")
+  .argument("<path>", "project path")
+  .action((id: string, projectPath: string) => {
+    try {
+      printRegisteredProject(registerProject(process.cwd(), id, projectPath, "manual"));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+project
+  .command("register-current")
+  .description("Register the current working directory as an allowed project.")
+  .argument("[id]", "optional safe project id")
+  .action((id?: string) => {
+    try {
+      printRegisteredProject(registerCurrentProject(process.cwd(), id));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+project
+  .command("list")
+  .description("List explicitly registered local projects.")
+  .option("--json", "print the registry as JSON")
+  .action((options: { json?: boolean }) => {
+    const projects = listProjects(process.cwd());
+    if (options.json) {
+      console.log(JSON.stringify({ registry: registryPath(process.cwd()), version: 1, projects }, null, 2));
+      return;
+    }
+
+    console.log(formatProjectList(projects, process.cwd()));
+  });
+
+project
+  .command("scan")
+  .description("Safely scan a user-selected folder for candidate projects.")
+  .argument("<root>", "folder to scan")
+  .option("--preview", "preview candidate projects without writing the registry")
+  .option("--register", "register discovered candidate projects")
+  .option("--select <indexes>", "comma-separated 1-based candidate indexes to register")
+  .option("--max-depth <n>", "maximum directory depth to scan", "4")
+  .option("--max-projects <n>", "maximum candidate projects to return", "50")
+  .option("--json", "print scan result as JSON")
+  .option("--include-non-git", "include non-git strong-marker projects; enabled by default")
+  .option("--name-style <style>", "candidate name style: folder, package, or git", "folder")
+  .action(
+    (
+      scanRootInput: string,
+      options: {
+        preview?: boolean;
+        register?: boolean;
+        select?: string;
+        maxDepth: string;
+        maxProjects: string;
+        json?: boolean;
+        includeNonGit?: boolean;
+        nameStyle: string;
+      }
+    ) => {
+      try {
+        if (options.preview && options.register) {
+          throw new Error("Use either --preview or --register, not both.");
+        }
+        if (!options.preview && !options.register) {
+          throw new Error("Use --preview to review candidates or --register to write selected candidates.");
+        }
+        if (options.select && !options.register) {
+          throw new Error("--select requires --register.");
+        }
+
+        const maxDepth = parseNonNegativeIntegerOption(options.maxDepth, "--max-depth");
+        const maxProjects = parseNonNegativeIntegerOption(options.maxProjects, "--max-projects");
+        const nameStyle = parseProjectNameStyle(options.nameStyle);
+        const discoverOptions = normalizeDiscoverOptions({
+          maxDepth,
+          maxProjects,
+          includeNonGit: true,
+          nameStyle
+        });
+        const scanRoot = validateScanRoot(scanRootInput);
+        const candidates = discoverProjects(scanRoot, discoverOptions);
+        const selectedIndexes = options.register && options.select ? parseScanSelection(options.select, candidates.length) : candidates.map((_, index) => index);
+        const registered = options.register
+          ? selectedIndexes.map((index) => registerProject(process.cwd(), candidates[index].id, candidates[index].root, "scan"))
+          : [];
+
+        const result: ProjectScanResult = {
+          ok: true,
+          root: scanRoot,
+          mode: options.register ? "register" : "preview",
+          max_depth: discoverOptions.maxDepth,
+          max_projects: discoverOptions.maxProjects,
+          candidates,
+          registered
+        };
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectScanResult(result));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
+
+project
+  .command("remove")
+  .description("Remove a project from the local registry without deleting its folder.")
+  .argument("<id>", "safe project id")
+  .action((id: string) => {
+    try {
+      console.log(JSON.stringify({ removed: removeProject(process.cwd(), id), registry: registryPath(process.cwd()) }, null, 2));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+project
+  .command("tree")
+  .description("Print a safe project tree for a registered project.")
+  .argument("<id>", "safe project id")
+  .option("--max-depth <n>", "maximum depth to traverse", "4")
+  .option("--max-entries <n>", "maximum entries to return", "500")
+  .option("--json", "print JSON tree result")
+  .action((id: string, options: { maxDepth: string; maxEntries: string; json?: boolean }) => {
+    try {
+      const project = resolveCliProject(id);
+      const result = getProjectTree(project.root, {
+        projectId: project.projectId,
+        maxDepth: parseNonNegativeIntegerOption(options.maxDepth, "--max-depth"),
+        maxEntries: parseNonNegativeIntegerOption(options.maxEntries, "--max-entries")
+      });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectTree(result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+project
+  .command("find-file")
+  .description("Search safe project-relative file names and paths.")
+  .argument("<id>", "safe project id")
+  .argument("<query>", "file name/path substring")
+  .option("--max-results <n>", "maximum matches to return", "50")
+  .option("--max-depth <n>", "maximum depth to traverse", "8")
+  .option("--case-sensitive", "use case-sensitive matching")
+  .option("--json", "print JSON search result")
+  .action((id: string, query: string, options: { maxResults: string; maxDepth: string; caseSensitive?: boolean; json?: boolean }) => {
+    try {
+      const project = resolveCliProject(id);
+      const result = searchProjectFiles(project.root, {
+        projectId: project.projectId,
+        query,
+        maxResults: parseNonNegativeIntegerOption(options.maxResults, "--max-results"),
+        maxDepth: parseNonNegativeIntegerOption(options.maxDepth, "--max-depth"),
+        caseSensitive: Boolean(options.caseSensitive)
+      });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectFileSearch(result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+project
+  .command("read-file")
+  .description("Read one safe project-relative text file.")
+  .argument("<id>", "safe project id")
+  .argument("<relativePath>", "project-relative file path")
+  .option("--max-chars <n>", "maximum content characters to return", "20000")
+  .option("--start-line <n>", "optional 1-based start line")
+  .option("--num-lines <n>", "optional number of lines")
+  .option("--json", "print JSON file result")
+  .action((id: string, relativePath: string, options: { maxChars: string; startLine?: string; numLines?: string; json?: boolean }) => {
+    try {
+      const project = resolveCliProject(id);
+      const result = readProjectFile(project.root, {
+        projectId: project.projectId,
+        relativePath,
+        maxChars: parseNonNegativeIntegerOption(options.maxChars, "--max-chars"),
+        ...(options.startLine ? { startLine: parseNonNegativeIntegerOption(options.startLine, "--start-line") } : {}),
+        ...(options.numLines ? { numLines: parseNonNegativeIntegerOption(options.numLines, "--num-lines") } : {})
+      });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectFileRead(result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+project
+  .command("grep")
+  .description("Search text inside safe project files.")
+  .argument("<id>", "safe project id")
+  .argument("<query>", "text to search for")
+  .option("--max-matches <n>", "maximum matches to return", "50")
+  .option("--max-file-size <n>", "maximum file size to search", "200000")
+  .option("--max-depth <n>", "maximum depth to traverse", "8")
+  .option("--case-sensitive", "use case-sensitive matching")
+  .option("--json", "print JSON grep result")
+  .action(
+    (
+      id: string,
+      query: string,
+      options: { maxMatches: string; maxFileSize: string; maxDepth: string; caseSensitive?: boolean; json?: boolean }
+    ) => {
+      try {
+        const project = resolveCliProject(id);
+        const result = searchProjectText(project.root, {
+          projectId: project.projectId,
+          query,
+          maxMatches: parseNonNegativeIntegerOption(options.maxMatches, "--max-matches"),
+          maxFileSize: parseNonNegativeIntegerOption(options.maxFileSize, "--max-file-size"),
+          maxDepth: parseNonNegativeIntegerOption(options.maxDepth, "--max-depth"),
+          caseSensitive: Boolean(options.caseSensitive)
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectTextSearch(result));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
+
+project
+  .command("inspect")
+  .description("Inspect a registered project by safe project id.")
+  .argument("<id>", "safe project id")
+  .option("--json", "print JSON inspector snapshot")
+  .option("--changes", "focus on changed files and Codex progress/result")
+  .action((id: string, options: { json?: boolean; changes?: boolean }) => {
+    try {
+      const registeredProjects = listProjects(process.cwd());
+      const registered = registeredProjects.length ? findProject(process.cwd(), id) : undefined;
+      const fallbackId = projectIdFromRoot(process.cwd());
+      const fallbackAllowed = !registeredProjects.length && id.toLowerCase() === fallbackId.toLowerCase();
+      if (!registered && !fallbackAllowed) {
+        throw new Error("Project is not registered.");
+      }
+
+      const root = registered?.root ?? process.cwd();
+      const projectId = registered?.id ?? fallbackId;
+      const projectName = registered?.name;
+      const commonOptions = {
+        projectId,
+        ...(projectName ? { projectName } : {}),
+        registered: Boolean(registered)
+      };
+      if (options.changes) {
+        const changes = createCodexChangesSummary(root, commonOptions);
+        console.log(options.json ? JSON.stringify(changes, null, 2) : formatCodexChangesHuman(changes));
+        return;
+      }
+
+      const snapshot = createProjectInspectorSnapshot(root, commonOptions);
+      console.log(options.json ? JSON.stringify(snapshot, null, 2) : formatInspectorHuman(snapshot));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+project
+  .command("select")
+  .description("Select an active registered project.")
+  .argument("<id>", "safe project id")
+  .action((id: string) => {
+    try {
+      console.log(JSON.stringify(selectActiveProject(process.cwd(), id, "cli"), null, 2));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+project
+  .command("active")
+  .description("Print the active selected project.")
+  .action(() => {
+    console.log(JSON.stringify(readActiveProject(process.cwd()), null, 2));
+  });
+
+project
+  .command("clear-active")
+  .description("Clear the active selected project.")
+  .action(() => {
+    console.log(JSON.stringify(clearActiveProject(process.cwd()), null, 2));
+  });
+
+const projects = program.command("projects").description("Alias for local project registry commands.");
 
 projects
   .command("list")
   .description("List registered projects.")
   .action(() => {
-    console.log(JSON.stringify({ registry: registryPath(), projects: listProjects() }, null, 2));
+    console.log(JSON.stringify({ registry: registryPath(process.cwd()), version: 1, projects: listProjects(process.cwd()) }, null, 2));
   });
 
 projects
   .command("add")
-  .description("Register a project in the global AgentBridge registry.")
+  .description("Register a project in the local AgentBridge registry using its folder name as the id.")
   .argument("[path]", "project path", process.cwd())
   .action((projectPath: string) => {
     try {
-      console.log(JSON.stringify(addProject(projectPath), null, 2));
+      printRegisteredProject(addProject(projectPath, process.cwd()));
     } catch (error) {
       handleError(error);
     }
@@ -424,10 +778,14 @@ projects
 
 projects
   .command("remove")
-  .description("Remove a project from the global AgentBridge registry.")
-  .argument("<path>", "project path")
-  .action((projectPath: string) => {
-    console.log(JSON.stringify({ removed: removeProject(projectPath), registry: registryPath() }, null, 2));
+  .description("Remove a project from the local AgentBridge registry.")
+  .argument("<id>", "safe project id")
+  .action((id: string) => {
+    try {
+      console.log(JSON.stringify({ removed: removeProject(process.cwd(), id), registry: registryPath(process.cwd()) }, null, 2));
+    } catch (error) {
+      handleError(error);
+    }
   });
 
 program

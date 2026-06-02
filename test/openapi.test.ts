@@ -7,6 +7,7 @@ const gptActionsSpecPath = path.resolve("openapi.agentbridge.gpt-actions.json");
 
 interface OperationSpec {
   operationId?: string;
+  description?: string;
   parameters?: Array<Record<string, unknown>>;
 }
 
@@ -30,7 +31,7 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
     const spec = JSON.parse(content) as {
       openapi: string;
       servers: Array<{ url: string }>;
-      paths: Record<string, Record<string, { operationId?: string; security?: unknown }>>;
+      paths: Record<string, Record<string, { operationId?: string; description?: string; security?: unknown }>>;
       components: {
         securitySchemes: Record<string, { type: string; scheme: string }>;
       };
@@ -44,6 +45,14 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
     });
 
     expect(spec.paths["/chatgpt/projects"].get.operationId).toBe("listProjects");
+    expect(spec.paths["/chatgpt/projects"].get.description).toContain("CodexLink projects");
+    expect(content).toContain("git_available");
+    expect(spec.paths["/chatgpt/projects/{projectId}/tree"].get.operationId).toBe("getProjectTree");
+    expect(spec.paths["/chatgpt/projects/{projectId}/files/search"].get.operationId).toBe("searchProjectFiles");
+    expect(spec.paths["/chatgpt/projects/{projectId}/file"].get.operationId).toBe("readProjectFile");
+    expect(spec.paths["/chatgpt/projects/{projectId}/grep"].get.operationId).toBe("searchProjectText");
+    expect(spec.paths["/chatgpt/projects/{projectId}/select"].post.operationId).toBe("selectProject");
+    expect(spec.paths["/chatgpt/active-project"].get.operationId).toBe("getActiveProject");
     expect(spec.paths["/chatgpt/projects/{projectId}/inspect"].get.operationId).toBe("inspectProject");
     expect(spec.paths["/chatgpt/projects/{projectId}/codex-changes"].get.operationId).toBe("getCodexChanges");
     expect(spec.paths["/chatgpt/projects/{projectId}/review-packet"].get.operationId).toBe("getReviewPacket");
@@ -54,6 +63,7 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
     const spec = JSON.parse(content) as { paths: Record<string, unknown> };
 
     expect(Object.keys(spec.paths)).not.toContain("/mcp");
+    expect(Object.keys(spec.paths).some((pathName) => pathName.includes("scan"))).toBe(false);
     expect(content).not.toContain(".agentbridge/local_token");
     expect(content).not.toContain("local_token");
     expect(content).not.toContain("OPENAI_API_KEY=");
@@ -77,14 +87,29 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
       scheme: "bearer"
     });
     expect(Object.keys(spec.paths)).not.toContain("/mcp");
+    expect(Object.keys(spec.paths).some((pathName) => pathName.includes("scan"))).toBe(false);
     expect(Object.keys(spec.paths)).toEqual([
       "/chatgpt/projects",
+      "/chatgpt/active-project",
+      "/chatgpt/projects/{projectId}/tree",
+      "/chatgpt/projects/{projectId}/files/search",
+      "/chatgpt/projects/{projectId}/file",
+      "/chatgpt/projects/{projectId}/grep",
+      "/chatgpt/projects/{projectId}/select",
       "/chatgpt/projects/{projectId}/inspect",
       "/chatgpt/projects/{projectId}/codex-changes",
       "/chatgpt/projects/{projectId}/review-packet"
     ]);
 
     expect(spec.paths["/chatgpt/projects"].get.operationId).toBe("listProjects");
+    expect(spec.paths["/chatgpt/projects"].get.description).toContain("CodexLink projects");
+    expect(JSON.stringify(spec.paths["/chatgpt/projects"].get)).toContain("git_available");
+    expect(spec.paths["/chatgpt/projects/{projectId}/tree"].get.operationId).toBe("getProjectTree");
+    expect(spec.paths["/chatgpt/projects/{projectId}/files/search"].get.operationId).toBe("searchProjectFiles");
+    expect(spec.paths["/chatgpt/projects/{projectId}/file"].get.operationId).toBe("readProjectFile");
+    expect(spec.paths["/chatgpt/projects/{projectId}/grep"].get.operationId).toBe("searchProjectText");
+    expect(spec.paths["/chatgpt/projects/{projectId}/select"].post.operationId).toBe("selectProject");
+    expect(spec.paths["/chatgpt/active-project"].get.operationId).toBe("getActiveProject");
     expect(spec.paths["/chatgpt/projects/{projectId}/inspect"].get.operationId).toBe("inspectProject");
     expect(spec.paths["/chatgpt/projects/{projectId}/codex-changes"].get.operationId).toBe("getCodexChanges");
     expect(spec.paths["/chatgpt/projects/{projectId}/review-packet"].get.operationId).toBe("getReviewPacket");
@@ -120,5 +145,15 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
     expect(content).not.toContain("sk-");
     expect(content).not.toContain("ghp_");
     expect(content).not.toContain("trycloudflare.com");
+  });
+
+  it("keeps operation descriptions within GPT Actions length limits", () => {
+    for (const filePath of [specPath, gptActionsSpecPath]) {
+      const spec = JSON.parse(fs.readFileSync(filePath, "utf8")) as OpenApiSpec;
+      for (const operation of operations(spec)) {
+        expect(typeof operation.description).toBe("string");
+        expect(operation.description?.length).toBeLessThanOrEqual(300);
+      }
+    }
   });
 });

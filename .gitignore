@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .agentbridge/
+.agentbridge/projects.json
 .env
 .env.*
 *.log

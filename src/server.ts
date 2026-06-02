@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createHash } from "node:crypto";
 import http from "node:http";
 import { URL } from "node:url";
 import { ensureLocalToken, isAuthorized } from "./auth.js";
@@ -7,13 +6,15 @@ import { createChatGptReview, createCodexPrompt } from "./core.js";
 import { dashboardHtml } from "./dashboard.js";
 import { appendText, pathExists, readTextIfExists, writeJson, writeText } from "./fsx.js";
 import { getGitInfo } from "./git.js";
-import { createCodexChangesSummary, createProjectInspectorSnapshot, projectIdFromName } from "./inspector.js";
+import { createCodexChangesSummary, createProjectInspectorSnapshot } from "./inspector.js";
 import { bridgePath, getBridgeDir, resolveProjectRoot } from "./paths.js";
+import { getProjectTree, ProjectFileError, readProjectFile, searchProjectFiles, searchProjectText } from "./projectFiles.js";
 import { redactSecrets } from "./redact.js";
-import { listProjects, type RegisteredProject } from "./registry.js";
+import { findProject, listProjects, projectIdFromRoot, projectRootHint, touchProject, validateProjectId, type RegisteredProject } from "./registry.js";
 import { classifyCommand, createApproval, listApprovals, resolveApproval } from "./safety.js";
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
 import type { AgentBridgeSession, RiskLevel, ServerInfo, ServerOptions } from "./types.js";
+import { readActiveProject, selectActiveProject } from "./activeProject.js";
 
 export interface RunningAgentBridgeServer {
   server: http.Server;
@@ -43,6 +44,8 @@ interface InspectorProjectRoute {
   registered: boolean;
   last_seen_at: string;
 }
+
+type ProjectListMode = "registry" | "current_project_fallback";
 
 function sendJson(response: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body, null, 2);
@@ -143,7 +146,7 @@ function currentInspectorProject(root: string): InspectorProjectRoute {
   const session = readSession(root);
   const name = session.project_name;
   return {
-    id: projectIdFromName(name),
+    id: projectIdFromRoot(root),
     name,
     root,
     registered: false,
@@ -152,24 +155,38 @@ function currentInspectorProject(root: string): InspectorProjectRoute {
 }
 
 function registeredInspectorProject(project: RegisteredProject): InspectorProjectRoute {
-  const rootHash = createHash("sha256").update(project.project_root.toLowerCase()).digest("hex").slice(0, 8);
   return {
-    id: `${projectIdFromName(project.project_name)}-${rootHash}`,
-    name: project.project_name,
-    root: project.project_root,
+    id: project.id,
+    name: project.name,
+    root: project.root,
     registered: true,
-    last_seen_at: project.last_seen_at
+    last_seen_at: project.last_seen
   };
 }
 
-function inspectorProjects(root: string): InspectorProjectRoute[] {
-  const registered = listProjects();
-  return registered.length ? registered.map(registeredInspectorProject) : [currentInspectorProject(root)];
+function inspectorProjects(root: string): { mode: ProjectListMode; projects: InspectorProjectRoute[] } {
+  const registered = listProjects(root);
+  return registered.length
+    ? { mode: "registry", projects: registered.map(registeredInspectorProject) }
+    : { mode: "current_project_fallback", projects: [currentInspectorProject(root)] };
 }
 
 function findInspectorProject(root: string, projectId: string): InspectorProjectRoute | undefined {
-  const normalized = projectId.toLowerCase();
-  return inspectorProjects(root).find((project) => project.id.toLowerCase() === normalized);
+  let id: string;
+  try {
+    id = validateProjectId(projectId);
+  } catch {
+    return undefined;
+  }
+
+  const registered = listProjects(root);
+  if (registered.length) {
+    const project = findProject(root, id);
+    return project ? registeredInspectorProject(project) : undefined;
+  }
+
+  const currentProject = currentInspectorProject(root);
+  return currentProject.id.toLowerCase() === id.toLowerCase() ? currentProject : undefined;
 }
 
 function parseInspectorOptions(url: URL): { maxCharsPerField?: number; includeDiff?: boolean } {
@@ -204,9 +221,47 @@ function sendProjectNotFound(response: http.ServerResponse): void {
     ok: false,
     error: {
       code: "project_not_found",
-      message: "Project is not registered. Run agentbridge projects add first."
+      message: "Project is not registered. Run agentbridge project register or agentbridge project register-current first."
     }
   });
+}
+
+function sendProjectFileError(response: http.ServerResponse, error: unknown): void {
+  if (error instanceof ProjectFileError) {
+    sendJson(response, error.status, {
+      ok: false,
+      error: {
+        code: error.code,
+        message: error.message
+      }
+    });
+    return;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  sendJson(response, 400, { ok: false, error: { code: "invalid_query", message } });
+}
+
+function queryInteger(url: URL, name: string): number | undefined {
+  const value = url.searchParams.get(name);
+  if (value === null) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${name} must be an integer.`);
+  }
+  return Number.parseInt(value, 10);
+}
+
+function queryBoolean(url: URL, name: string): boolean | undefined {
+  const value = url.searchParams.get(name);
+  if (value === null) {
+    return undefined;
+  }
+  if (value !== "true" && value !== "false") {
+    throw new Error(`${name} must be true or false.`);
+  }
+  return value === "true";
 }
 
 function writeServerInfo(root: string, info: ServerInfo): void {
@@ -301,19 +356,189 @@ export async function startAgentBridgeServer(
       }
 
       if (request.method === "GET" && url.pathname === "/chatgpt/projects") {
-        const projects = inspectorProjects(root).map((project) => {
+        const projectList = inspectorProjects(root);
+        const projects = projectList.projects.map((project) => {
           const git = getGitInfo(project.root, "short");
           return {
             id: project.id,
             name: project.name,
-            root_hint: redactSecrets(project.root),
+            root_hint: redactSecrets(projectRootHint(project.root)),
             registered: project.registered,
+            git_available: git.available,
             branch: git.branch,
             clean: git.available ? git.changedFiles.length === 0 : false,
             last_seen: project.last_seen_at
           };
         });
-        sendJson(response, 200, { ok: true, projects });
+        sendJson(response, 200, { ok: true, mode: projectList.mode, projects });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/chatgpt/active-project") {
+        sendJson(response, 200, readActiveProject(root));
+        return;
+      }
+
+      const selectProjectRoute = /^\/chatgpt\/projects\/([^/]+)\/select$/.exec(url.pathname);
+      if (request.method === "POST" && selectProjectRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(selectProjectRoute[1]);
+          validateProjectId(projectId);
+        } catch {
+          sendProjectNotFound(response);
+          return;
+        }
+
+        if (!listProjects(root).length || !findProject(root, projectId)) {
+          sendProjectNotFound(response);
+          return;
+        }
+
+        const active = selectActiveProject(root, projectId, "chatgpt_action");
+        appendAudit(root, "http.chatgpt.project.select", { project_id: projectId });
+        sendJson(response, 200, active);
+        return;
+      }
+
+      const treeRoute = /^\/chatgpt\/projects\/([^/]+)\/tree$/.exec(url.pathname);
+      if (request.method === "GET" && treeRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(treeRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(
+            response,
+            200,
+            getProjectTree(project.root, {
+              projectId: project.id,
+              maxDepth: queryInteger(url, "max_depth"),
+              maxEntries: queryInteger(url, "max_entries"),
+              includeHidden: queryBoolean(url, "include_hidden"),
+              includeSizes: queryBoolean(url, "include_sizes")
+            })
+          );
+        } catch (error) {
+          sendProjectFileError(response, error);
+        }
+        return;
+      }
+
+      const fileSearchRoute = /^\/chatgpt\/projects\/([^/]+)\/files\/search$/.exec(url.pathname);
+      if (request.method === "GET" && fileSearchRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(fileSearchRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(
+            response,
+            200,
+            searchProjectFiles(project.root, {
+              projectId: project.id,
+              query: url.searchParams.get("q") ?? "",
+              maxResults: queryInteger(url, "max_results"),
+              maxDepth: queryInteger(url, "max_depth"),
+              caseSensitive: queryBoolean(url, "case_sensitive")
+            })
+          );
+        } catch (error) {
+          sendProjectFileError(response, error);
+        }
+        return;
+      }
+
+      const readFileRoute = /^\/chatgpt\/projects\/([^/]+)\/file$/.exec(url.pathname);
+      if (request.method === "GET" && readFileRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(readFileRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(
+            response,
+            200,
+            readProjectFile(project.root, {
+              projectId: project.id,
+              relativePath: url.searchParams.get("path") ?? "",
+              maxChars: queryInteger(url, "max_chars"),
+              startLine: queryInteger(url, "start_line"),
+              numLines: queryInteger(url, "num_lines")
+            })
+          );
+        } catch (error) {
+          sendProjectFileError(response, error);
+        }
+        return;
+      }
+
+      const grepRoute = /^\/chatgpt\/projects\/([^/]+)\/grep$/.exec(url.pathname);
+      if (request.method === "GET" && grepRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(grepRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(
+            response,
+            200,
+            searchProjectText(project.root, {
+              projectId: project.id,
+              query: url.searchParams.get("q") ?? "",
+              maxMatches: queryInteger(url, "max_matches"),
+              maxFileSize: queryInteger(url, "max_file_size"),
+              maxDepth: queryInteger(url, "max_depth"),
+              caseSensitive: queryBoolean(url, "case_sensitive")
+            })
+          );
+        } catch (error) {
+          sendProjectFileError(response, error);
+        }
         return;
       }
 
@@ -353,16 +578,28 @@ export async function startAgentBridgeServer(
         };
 
         if (inspectorRoute[2] === "inspect") {
-          sendJson(response, 200, createProjectInspectorSnapshot(project.root, commonOptions));
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          const snapshot = createProjectInspectorSnapshot(project.root, commonOptions);
+          snapshot.project.root_hint = redactSecrets(projectRootHint(project.root));
+          sendJson(response, 200, snapshot);
           return;
         }
 
         if (inspectorRoute[2] === "codex-changes") {
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
           sendJson(response, 200, createCodexChangesSummary(project.root, commonOptions));
           return;
         }
 
+        if (project.registered) {
+          touchProject(root, project.id);
+        }
         const snapshot = createProjectInspectorSnapshot(project.root, commonOptions);
+        snapshot.project.root_hint = redactSecrets(projectRootHint(project.root));
         sendJson(response, 200, {
           ok: true,
           project_id: snapshot.project.id,
@@ -471,7 +708,7 @@ export async function startAgentBridgeServer(
       }
 
       if (request.method === "GET" && url.pathname === "/projects") {
-        sendJson(response, 200, { ok: true, projects: listProjects() });
+        sendJson(response, 200, { ok: true, registry: { version: 1, projects: listProjects(root) } });
         return;
       }
 

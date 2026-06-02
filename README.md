@@ -307,6 +307,72 @@ agentbridge inspect --for-chatgpt
 
 See `INSPECTOR.md` and `CHATGPT_TOOL_ADAPTER.md` for usage and safety details.
 
+## v0.5 Project Registry And Picker
+
+AgentBridge can expose multiple explicitly registered local projects to ChatGPT/GPT Actions. The registry is local-only:
+
+```text
+.agentbridge/projects.json
+```
+
+Register projects:
+
+```text
+agentbridge project register AgentBridge D:\AgentBridge
+agentbridge project register-current AgentBridge
+agentbridge project list
+agentbridge project inspect AgentBridge
+agentbridge project remove AgentBridge
+```
+
+v0.5-beta safe project discovery scans a user-selected folder, previews strong-marker project candidates, and registers selected projects:
+
+```text
+agentbridge project scan D:\Projects --preview
+agentbridge project scan D:\Projects --register --select 1,3
+agentbridge project scan D:\Projects --register
+```
+
+The scan is CLI-only, bounded by `--max-depth` and `--max-projects`, and does not scan the whole machine. It does not add a `/chatgpt/scan` endpoint.
+
+`GET /chatgpt/projects` now returns `mode: "registry"` when registered projects exist, or `mode: "current_project_fallback"` when the registry is empty. GPTs should call `listProjects`, show a lightweight project picker, then inspect only the project selected by the user.
+
+Project IDs are safe identifiers returned by `listProjects`; HTTP endpoints do not accept raw filesystem paths. Users explicitly choose which project roots to expose. Codex app workspace auto-discovery is not implemented in v0.5-beta.
+
+v0.5-gamma adds a safe project tree and file reader for registered projects:
+
+```text
+agentbridge project tree AgentBridge --json
+agentbridge project find-file AgentBridge README --json
+agentbridge project read-file AgentBridge README.md --json
+agentbridge project grep AgentBridge "search text" --json
+```
+
+HTTP/GPT Actions:
+
+```text
+GET /chatgpt/projects/:projectId/tree
+GET /chatgpt/projects/:projectId/files/search
+GET /chatgpt/projects/:projectId/file
+GET /chatgpt/projects/:projectId/grep
+```
+
+Paths for file reads are project-relative only. Absolute paths, traversal, secret files, binary files, and oversized reads are rejected or limited.
+
+v0.5-delta adds active project selection:
+
+```text
+agentbridge project select AgentBridge
+agentbridge project active
+agentbridge project clear-active
+GET  /chatgpt/active-project
+POST /chatgpt/projects/:projectId/select
+```
+
+The active project file stores only local selection metadata and no token/auth values.
+
+See `PROJECT_REGISTRY.md` for the full registry and picker flow.
+
 ## Phase 4 Safety And Approvals
 
 Classify a command without running it:
@@ -356,19 +422,16 @@ By default, `agentbridge codex` behaves like `agentbridge codex --copy`. The run
 
 ## Phase 7 Multi-Project And Pairing
 
-Register and list projects:
+Register and list explicitly allowed local projects:
 
 ```bash
-agentbridge projects add
-agentbridge projects list
-agentbridge projects remove "D:\\path\\to\\project"
+agentbridge project register-current AgentBridge
+agentbridge project register CoreWeaver D:\CoreWeaver
+agentbridge project list
+agentbridge project remove CoreWeaver
 ```
 
-The registry is stored under the OS user data directory by default. Override it for testing or portable setups:
-
-```bash
-AGENTBRIDGE_HOME=/path/to/agentbridge-home agentbridge projects list
-```
+The registry is stored in `.agentbridge/projects.json` under the current AgentBridge root and is ignored by git. The older `agentbridge projects ...` command remains as a local alias, but `agentbridge project ...` is the v0.5 command set.
 
 Print a dashboard URL for another device:
 

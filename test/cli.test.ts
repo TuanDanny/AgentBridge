@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,16 @@ function runCli(root: string, ...args: string[]): string {
     encoding: "utf8",
     windowsHide: true
   });
+}
+
+function runCliFailure(root: string, ...args: string[]): string {
+  try {
+    runCli(root, ...args);
+  } catch (error) {
+    const failure = error as { stdout?: string; stderr?: string };
+    return `${failure.stdout ?? ""}${failure.stderr ?? ""}`;
+  }
+  throw new Error("Expected CLI command to fail.");
 }
 
 function run(root: string, command: string, args: string[] = []): string {
@@ -125,5 +136,156 @@ describe("compiled CLI smoke tests", () => {
     expect(runCli(root, "inspect", "--changes")).toContain("AgentBridge Codex Changes");
     expect(runCli(root, "inspect", "--for-chatgpt")).toContain("project_inspect_packet.md");
     expect(fs.existsSync(path.join(root, ".agentbridge", "project_inspect_packet.md"))).toBe(true);
+  });
+
+  it("supports project registry CLI commands", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-registry-");
+    const projectRoot = makeTempRoot("agentbridge-cli-registered-");
+
+    const current = JSON.parse(runCli(registryRoot, "project", "register-current", "RegistryRoot"));
+    expect(current.id).toBe("RegistryRoot");
+
+    const registered = JSON.parse(runCli(registryRoot, "project", "register", "OtherProject", projectRoot));
+    expect(registered.id).toBe("OtherProject");
+    expect(registered.root).toBe(path.resolve(projectRoot));
+
+    const list = runCli(registryRoot, "project", "list");
+    expect(list).toContain("RegistryRoot");
+    expect(list).toContain("OtherProject");
+    expect(list).toContain("Git");
+    expect(list).toContain("Status");
+    expect(list).toContain("Last seen");
+
+    const inspect = JSON.parse(runCli(registryRoot, "project", "inspect", "OtherProject", "--json"));
+    expect(inspect.ok).toBe(true);
+    expect(inspect.project.id).toBe("OtherProject");
+
+    const removed = JSON.parse(runCli(registryRoot, "project", "remove", "OtherProject"));
+    expect(removed.removed).toBe(true);
+    const listJson = JSON.parse(runCli(registryRoot, "project", "list", "--json"));
+    expect(listJson.projects.map((project: { id: string }) => project.id)).toEqual(["RegistryRoot"]);
+  });
+
+  it("supports project registry current-project fallback in CLI", () => {
+    const root = makeTempRoot("agentbridge-cli-fallback-");
+    const fallbackId = path.basename(root);
+
+    const list = runCli(root, "project", "list");
+    expect(list).toContain("Current-project fallback is active");
+    expect(list).toContain(fallbackId);
+
+    const inspect = JSON.parse(runCli(root, "project", "inspect", fallbackId, "--json"));
+    expect(inspect.ok).toBe(true);
+    expect(inspect.project.id).toBe(fallbackId);
+    expect(inspect.project.registered).toBe(false);
+  });
+
+  it("supports safe project discovery preview and JSON output", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-scan-preview-registry-");
+    const scanRoot = makeTempRoot("agentbridge-cli-scan-preview-");
+    fs.mkdirSync(path.join(scanRoot, "ProjectA"), { recursive: true });
+    fs.writeFileSync(path.join(scanRoot, "ProjectA", "package.json"), "{\"name\":\"project-a\"}\n", "utf8");
+    fs.mkdirSync(path.join(scanRoot, "ProjectB"), { recursive: true });
+    fs.writeFileSync(path.join(scanRoot, "ProjectB", "pyproject.toml"), "[project]\n", "utf8");
+    fs.mkdirSync(path.join(scanRoot, "node_modules", "FakeProject"), { recursive: true });
+    fs.writeFileSync(path.join(scanRoot, "node_modules", "FakeProject", "package.json"), "{}", "utf8");
+
+    const preview = runCli(registryRoot, "project", "scan", scanRoot, "--preview");
+
+    expect(preview).toContain("Found 2 candidate projects");
+    expect(preview).toContain("[1] ProjectA");
+    expect(preview).toContain("[2] ProjectB");
+    expect(preview).not.toContain("FakeProject");
+    expect(fs.existsSync(path.join(registryRoot, ".agentbridge", "projects.json"))).toBe(false);
+
+    const json = JSON.parse(runCli(registryRoot, "project", "scan", scanRoot, "--preview", "--json"));
+    expect(json.ok).toBe(true);
+    expect(json.mode).toBe("preview");
+    expect(json.candidates.map((candidate: { id: string }) => candidate.id)).toEqual(["ProjectA", "ProjectB"]);
+    expect(json.registered).toEqual([]);
+  });
+
+  it("supports safe project discovery register, select, list, and inspect", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-scan-register-registry-");
+    const scanRoot = makeTempRoot("agentbridge-cli-scan-register-");
+    fs.mkdirSync(path.join(scanRoot, "ProjectA"), { recursive: true });
+    fs.writeFileSync(path.join(scanRoot, "ProjectA", "package.json"), "{\"name\":\"project-a\"}\n", "utf8");
+    fs.mkdirSync(path.join(scanRoot, "ProjectB"), { recursive: true });
+    fs.writeFileSync(path.join(scanRoot, "ProjectB", "pyproject.toml"), "[project]\n", "utf8");
+
+    const selected = runCli(registryRoot, "project", "scan", scanRoot, "--register", "--select", "1");
+    expect(selected).toContain("Registered 1 project");
+    let listJson = JSON.parse(runCli(registryRoot, "project", "list", "--json"));
+    expect(listJson.projects.map((project: { id: string }) => project.id)).toEqual(["ProjectA"]);
+    expect(listJson.projects[0].source).toBe("scan");
+
+    const inspect = JSON.parse(runCli(registryRoot, "project", "inspect", "ProjectA", "--json"));
+    expect(inspect.ok).toBe(true);
+    expect(inspect.project.id).toBe("ProjectA");
+
+    const all = runCli(registryRoot, "project", "scan", scanRoot, "--register");
+    expect(all).toContain("Registered 2 project");
+    listJson = JSON.parse(runCli(registryRoot, "project", "list", "--json"));
+    expect(listJson.projects.map((project: { id: string }) => project.id)).toEqual(["ProjectA", "ProjectB"]);
+
+    const invalid = runCliFailure(registryRoot, "project", "scan", scanRoot, "--register", "--select", "9");
+    expect(invalid).toContain("Invalid --select index");
+  });
+
+  it("supports project tree, find-file, read-file, grep, and active project CLI commands", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-file-registry-");
+    const projectRoot = makeTempRoot("agentbridge-cli-file-project-");
+    const suffix = randomUUID().replace(/-/g, "");
+    const token = `CODEXLINK_GAMMA_TOKEN_${randomUUID()}`;
+    const relativePath = `docs_${suffix.slice(0, 8)}\\note_${suffix}.txt`;
+    fs.mkdirSync(path.dirname(path.join(projectRoot, relativePath)), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, relativePath), `${token}\nCLI generated file.\n`, "utf8");
+    fs.writeFileSync(path.join(projectRoot, "safe-secret.txt"), `Authorization: Bearer ${"a".repeat(32)}\n`, "utf8");
+
+    JSON.parse(runCli(registryRoot, "project", "register", "CliGamma", projectRoot));
+
+    const tree = JSON.parse(runCli(registryRoot, "project", "tree", "CliGamma", "--json"));
+    expect(tree.entries.some((entry: { path: string }) => entry.path === relativePath.replace(/\\/g, "/"))).toBe(true);
+
+    const find = JSON.parse(runCli(registryRoot, "project", "find-file", "CliGamma", `note_${suffix}`, "--json"));
+    expect(find.matches.map((match: { path: string }) => match.path)).toEqual([relativePath.replace(/\\/g, "/")]);
+
+    const read = JSON.parse(runCli(registryRoot, "project", "read-file", "CliGamma", relativePath, "--json"));
+    expect(read.content).toContain(token);
+
+    const grep = JSON.parse(runCli(registryRoot, "project", "grep", "CliGamma", token, "--json"));
+    expect(grep.matches.map((match: { path: string }) => match.path)).toEqual([relativePath.replace(/\\/g, "/")]);
+
+    const redacted = JSON.parse(runCli(registryRoot, "project", "read-file", "CliGamma", "safe-secret.txt", "--json"));
+    expect(redacted.content).toContain("Bearer [REDACTED]");
+
+    const selected = JSON.parse(runCli(registryRoot, "project", "select", "CliGamma"));
+    expect(selected.active_project.id).toBe("CliGamma");
+    const eventFile = path.join(registryRoot, ".agentbridge", "active_project_events.jsonl");
+    const events = fs.readFileSync(eventFile, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: "select_project",
+      project_id: "CliGamma",
+      previous_project_id: null,
+      selected_by: "cli"
+    });
+    expect(events[0].root_hint).toContain(path.basename(projectRoot));
+    const eventText = fs.readFileSync(eventFile, "utf8");
+    expect(eventText).not.toContain(token);
+    expect(eventText).not.toContain("Authorization");
+    expect(eventText).not.toContain("Bearer");
+    expect(eventText).not.toContain("OPENAI_API_KEY");
+    expect(eventText).not.toContain("sk-");
+    expect(eventText).not.toContain(projectRoot);
+    const active = JSON.parse(runCli(registryRoot, "project", "active"));
+    expect(active.active_project.id).toBe("CliGamma");
+    const cleared = JSON.parse(runCli(registryRoot, "project", "clear-active"));
+    expect(cleared.cleared).toBe(true);
+  });
+
+  it("keeps active project event logs local-only", () => {
+    const ignored = run(process.cwd(), "git", ["check-ignore", "-v", ".agentbridge/active_project_events.jsonl"]);
+    expect(ignored).toContain(".agentbridge/");
   });
 });
