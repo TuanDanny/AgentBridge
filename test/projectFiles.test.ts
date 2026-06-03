@@ -196,4 +196,25 @@ describe("safe project file browser", () => {
       expect(match.snippet).not.toContain(token);
     }
   });
+
+  it("uses expanded default tree budget and enforces the hard entry cap", () => {
+    const root = makeTempRoot();
+    writeText(root, "README.md", "Project overview\n");
+    writeText(root, "src/index.ts", "export const ok = true;\n");
+
+    const defaults = getProjectTree(root, { projectId: "BudgetProject" });
+    expect(defaults.max_depth).toBe(6);
+    expect(defaults.max_entries).toBe(6000);
+    expect(defaults.inventory.max_depth_used).toBe(6);
+    expect(defaults.inventory.max_entries_used).toBe(6000);
+    expect(defaults.inventory.complete).toBe(true);
+    expect(defaults.classification).toBeDefined();
+    expect(Array.isArray(defaults.recommended_next_reads)).toBe(true);
+
+    const hardCap = getProjectTree(root, { projectId: "BudgetProject", maxEntries: 10000 });
+    expect(hardCap.max_entries).toBe(10000);
+    expect(hardCap.inventory.max_entries_used).toBe(10000);
+
+    expect(() => getProjectTree(root, { projectId: "BudgetProject", maxEntries: 10001 })).toThrow("10000");
+  });
 });

@@ -131,8 +131,9 @@ export class ProjectFileError extends Error {
   }
 }
 
-const DEFAULT_TREE_DEPTH = 4;
-const DEFAULT_TREE_ENTRIES = 3000;
+const DEFAULT_TREE_DEPTH = 6;
+const DEFAULT_TREE_ENTRIES = 6000;
+const MAX_TREE_ENTRIES = 10000;
 const DEFAULT_SEARCH_DEPTH = 8;
 const DEFAULT_SEARCH_RESULTS = 50;
 const DEFAULT_MAX_READ_BYTES = 512 * 1024;
@@ -165,7 +166,7 @@ const BINARY_EXTENSIONS = new Set([
 export function getProjectTree(root: string, options: ProjectTreeOptions): ProjectTreeResult {
   const projectRoot = canonicalProjectRoot(root);
   const maxDepth = boundedInteger(options.maxDepth ?? DEFAULT_TREE_DEPTH, "max_depth", 0, 20);
-  const maxEntries = boundedInteger(options.maxEntries ?? DEFAULT_TREE_ENTRIES, "max_entries", 1, 5000);
+  const maxEntries = boundedInteger(options.maxEntries ?? DEFAULT_TREE_ENTRIES, "max_entries", 1, MAX_TREE_ENTRIES);
   const includeHidden = options.includeHidden ?? false;
   const includeSizes = options.includeSizes ?? true;
   const entries: ProjectFileEntry[] = [];

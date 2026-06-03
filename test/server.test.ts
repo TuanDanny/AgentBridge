@@ -765,10 +765,37 @@ describe("local daemon", () => {
     const denied = await requestJson({ host: running.info.host, port: running.info.port, path: "/chatgpt/projects/GammaProject/tree" });
     expect(denied.status).toBe(401);
 
+    const defaultTree = await requestJson<{
+      max_depth: number;
+      max_entries: number;
+      inventory: { max_depth_used: number; max_entries_used: number };
+    }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/GammaProject/tree",
+      token: localToken
+    });
+    expect(defaultTree.status).toBe(200);
+    expect(defaultTree.body.max_depth).toBe(6);
+    expect(defaultTree.body.max_entries).toBe(6000);
+    expect(defaultTree.body.inventory.max_depth_used).toBe(6);
+    expect(defaultTree.body.inventory.max_entries_used).toBe(6000);
+
+    const overCapTree = await requestJson<{ ok: boolean; error: { code: string; message: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/GammaProject/tree?max_entries=10001",
+      token: localToken
+    });
+    expect(overCapTree.status).toBe(400);
+    expect(overCapTree.body.ok).toBe(false);
+    expect(overCapTree.body.error.message).toContain("10000");
+
     const tree = await requestJson<{
       ok: boolean;
       entries: Array<{ path: string }>;
       root_hint: string;
+      max_entries: number;
       total_files: number;
       total_folders: number;
       inventory: { complete: boolean; scale_hint: string; tree_truncated: boolean };
@@ -786,6 +813,7 @@ describe("local daemon", () => {
       }
     );
     expect(tree.status).toBe(200);
+    expect(tree.body.max_entries).toBe(6000);
     expect(tree.body.entries.map((entry) => entry.path)).toContain(noteFile);
     expect(tree.body.entries.map((entry) => entry.path)).toContain(targetFile);
     expect(tree.body.total_files).toBeGreaterThanOrEqual(4);

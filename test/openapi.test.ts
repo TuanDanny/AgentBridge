@@ -25,6 +25,10 @@ function operations(spec: OpenApiSpec): OperationSpec[] {
   return Object.values(spec.paths).flatMap((pathItem) => Object.values(pathItem));
 }
 
+function parameterByName(operation: OperationSpec, name: string): Record<string, unknown> | undefined {
+  return operation.parameters?.find((parameter) => parameter.name === name);
+}
+
 describe("ChatGPT tool adapter OpenAPI spec", () => {
   it("parses as JSON and describes the project inspector endpoints", () => {
     const content = fs.readFileSync(specPath, "utf8");
@@ -154,6 +158,21 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
         expect(typeof operation.description).toBe("string");
         expect(operation.description?.length).toBeLessThanOrEqual(300);
       }
+    }
+  });
+
+  it("documents the expanded getProjectTree entry budget", () => {
+    for (const filePath of [specPath, gptActionsSpecPath]) {
+      const spec = JSON.parse(fs.readFileSync(filePath, "utf8")) as OpenApiSpec;
+      const treeOperation = spec.paths["/chatgpt/projects/{projectId}/tree"].get;
+      const maxEntries = parameterByName(treeOperation, "max_entries");
+
+      expect(maxEntries).toBeDefined();
+      expect(maxEntries?.schema).toMatchObject({
+        type: "integer",
+        minimum: 1,
+        maximum: 10000
+      });
     }
   });
 });

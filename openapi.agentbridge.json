@@ -114,7 +114,7 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 5000
+              "maximum": 10000
             }
           },
           {
