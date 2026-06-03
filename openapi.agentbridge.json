@@ -84,7 +84,7 @@
       "get": {
         "operationId": "getProjectTree",
         "summary": "Get project tree",
-        "description": "Return a safe limited tree for one CodexLink project by projectId from listProjects. Counts files/folders, applies ignores, and returns project-relative paths.",
+        "description": "Return a safe project tree plus awareness metadata: inventory, classification, important files, recommended reads, suspicious files, and coverage warnings.",
         "parameters": [
           {
             "name": "projectId",
@@ -186,6 +186,48 @@
                         "type": "object",
                         "additionalProperties": true
                       }
+                    },
+                    "inventory": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "classification": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "important_candidates": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "recommended_next_reads": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "suspicious_root_files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "coverage_warning": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": true
+                    },
+                    "recommended_next_action": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "additionalProperties": true
@@ -307,7 +349,7 @@
       "get": {
         "operationId": "readProjectFile",
         "summary": "Read project file",
-        "description": "Read one safe text file by project-relative path in a CodexLink project. Rejects absolute paths, traversal, secret files, binary files, and oversized files.",
+        "description": "Read one safe text file by project-relative path. Blocks unsafe paths/secrets/binary files and returns read_status plus coverage warning when partial.",
         "parameters": [
           {
             "name": "projectId",
@@ -387,6 +429,33 @@
                     },
                     "truncated": {
                       "type": "boolean"
+                    },
+                    "read_status": {
+                      "type": "string"
+                    },
+                    "line_count": {
+                      "type": "integer"
+                    },
+                    "line_count_estimate": {
+                      "type": "integer"
+                    },
+                    "line_range_returned": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "integer"
+                      }
+                    },
+                    "bytes_returned": {
+                      "type": "integer"
+                    },
+                    "coverage_warning": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "redacted": {
                       "type": "boolean"

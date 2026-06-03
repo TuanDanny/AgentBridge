@@ -47,11 +47,19 @@ describe("project inspector", () => {
 
     expect(snapshot.ok).toBe(true);
     expect(snapshot.project.name).toBe(path.basename(root));
-    expect(snapshot.project.root_hint).toBe(root);
+    expect(snapshot.project.root_hint).toContain(path.basename(root));
+    expect(snapshot.project.root_hint).not.toBe(root);
     expect(snapshot.repo.branch).toBeDefined();
     expect(snapshot.agentbridge.next_action).toBe("create_codex_prompt");
     expect(snapshot.codex.chatgpt_plan_summary).toContain("# ChatGPT Plan");
     expect(snapshot.safety.pending_approvals).toBe(0);
+    expect(snapshot.tests.latest_summary).toBe("No fresh test log was found.");
+    expect(snapshot.tests.stale).toBe(true);
+    expect(snapshot.repo_awareness).toMatchObject({
+      has_inventory: false,
+      fresh_test_log_status: "missing"
+    });
+    expect(snapshot.repo_awareness.known_limits[0]).toContain("getProjectTree");
     expect(snapshot.limits.redacted).toBe(true);
   });
 
@@ -101,10 +109,64 @@ describe("project inspector", () => {
 
     expect(snapshot.codex.progress_summary).toContain("Implemented inspector core.");
     expect(snapshot.codex.result_summary).toContain("Changed inspector files.");
-    expect(snapshot.safety.pending_approvals).toBe(1);
+    expect(snapshot.safety.pending_approvals).toBe(0);
     expect(snapshot.safety.risk_flags[0]).toContain("high");
+    expect(snapshot.safety.risk_flags[0]).toContain("actionable=false");
+    expect(snapshot.safety.approvals[0]).toMatchObject({
+      action: "run_command",
+      risk: "high",
+      status: "pending",
+      stale: true,
+      actionable: false,
+      recommendation: "Do not run this command."
+    });
     expect(changes.codex_progress).toContain("Implemented inspector core.");
     expect(changes.codex_result).toContain("Changed inspector files.");
+  });
+
+  it("redacts raw local roots and stale generic review claims", () => {
+    const root = makeTempRoot();
+    const hintBasename = path.basename(root);
+    writeBridgeFile(
+      root,
+      "chatgpt_review.md",
+      [
+        "# ChatGPT Review Packet",
+        "",
+        `Root: ${root}`,
+        "## Commands Run",
+        "",
+        "- Not run yet.",
+        "",
+        "## Tests",
+        "",
+        "Not run yet.",
+        "",
+        ".agentbridge/local_token",
+        "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+        "OPENAI_API_KEY=sk-123456789012345678901234",
+        "-----BEGIN PRIVATE KEY-----",
+        "abc123",
+        "-----END PRIVATE KEY-----"
+      ].join("\n")
+    );
+    writeBridgeFile(root, "codex_result.md", "Fresh result after review.");
+    const oldDate = new Date(Date.now() - 10_000);
+    fs.utimesSync(bridgeFile(root, "chatgpt_review.md"), oldDate, oldDate);
+
+    const snapshot = createProjectInspectorSnapshot(root);
+    const serialized = JSON.stringify(snapshot);
+
+    expect(snapshot.codex.review_packet_stale).toBe(true);
+    expect(snapshot.codex.review_packet_stale_reason).toBe("review packet older than current repo/session/test data");
+    expect(snapshot.codex.review_packet_summary).toContain(hintBasename);
+    expect(snapshot.codex.review_packet_summary).not.toContain(root);
+    expect(snapshot.codex.review_packet_summary).toContain("No fresh command log was found.");
+    expect(snapshot.codex.review_packet_summary).toContain("No fresh test log was found.");
+    expect(serialized).not.toContain(root);
+    expect(serialized).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(serialized).not.toContain("sk-123456789012345678901234");
+    expect(serialized).not.toContain("abc123");
   });
 
   it("redacts token-like values, local token values, and private keys", () => {

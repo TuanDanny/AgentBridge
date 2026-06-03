@@ -230,6 +230,7 @@ function sendProjectFileError(response: http.ServerResponse, error: unknown): vo
   if (error instanceof ProjectFileError) {
     sendJson(response, error.status, {
       ok: false,
+      ...projectFileErrorCoverage(error),
       error: {
         code: error.code,
         message: error.message
@@ -240,6 +241,42 @@ function sendProjectFileError(response: http.ServerResponse, error: unknown): vo
 
   const message = error instanceof Error ? error.message : String(error);
   sendJson(response, 400, { ok: false, error: { code: "invalid_query", message } });
+}
+
+function projectFileErrorCoverage(error: ProjectFileError): {
+  read_status: "blocked" | "binary" | "not_found" | "error";
+  blocked_reason?: string;
+  truncated: false;
+  coverage_warning: string;
+} {
+  if (error.code === "blocked_sensitive_file") {
+    return {
+      read_status: "blocked",
+      blocked_reason: "sensitive_file_policy",
+      truncated: false,
+      coverage_warning: "Sensitive file blocked. Contents were not read."
+    };
+  }
+  if (error.code === "binary_file") {
+    return {
+      read_status: "binary",
+      blocked_reason: "binary_file",
+      truncated: false,
+      coverage_warning: "Binary file blocked. Contents were not read."
+    };
+  }
+  if (error.code === "not_found") {
+    return {
+      read_status: "not_found",
+      truncated: false,
+      coverage_warning: "Requested file was not found. Contents were not read."
+    };
+  }
+  return {
+    read_status: "error",
+    truncated: false,
+    coverage_warning: "Requested file was not read."
+  };
 }
 
 function queryInteger(url: URL, name: string): number | undefined {
@@ -345,12 +382,15 @@ export async function startAgentBridgeServer(
       }
 
       if (request.method === "GET" && url.pathname === "/chatgpt/review-packet") {
+        const snapshot = createProjectInspectorSnapshot(root);
         sendJson(response, 200, {
           ok: true,
-          review: readRedactedTextIfExists(
-            bridgePath(root, "chatgpt_review.md"),
-            "No ChatGPT review packet found. Run agentbridge review or POST /review."
-          )
+          review: snapshot.codex.review_packet_summary,
+          root_hint: snapshot.project.root_hint,
+          stale: snapshot.codex.review_packet_stale,
+          ...(snapshot.codex.review_packet_stale_reason ? { stale_reason: snapshot.codex.review_packet_stale_reason } : {}),
+          tests: snapshot.tests,
+          approvals: snapshot.safety.approvals
         });
         return;
       }
@@ -604,10 +644,14 @@ export async function startAgentBridgeServer(
           ok: true,
           project_id: snapshot.project.id,
           review_packet: {
+            root_hint: snapshot.project.root_hint,
             summary: snapshot.codex.review_packet_summary,
+            stale: snapshot.codex.review_packet_stale,
+            ...(snapshot.codex.review_packet_stale_reason ? { stale_reason: snapshot.codex.review_packet_stale_reason } : {}),
             files_changed: snapshot.codex.changed_file_summary,
-            tests: snapshot.tests.latest_summary,
+            tests: snapshot.tests,
             risks: snapshot.safety.risk_flags,
+            approvals: snapshot.safety.approvals,
             questions_for_chatgpt: [
               "Did Codex satisfy the current user goal?",
               "Are the tests sufficient for the changed files?",

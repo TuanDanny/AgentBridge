@@ -1,11 +1,15 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { appendAudit, readSession } from "./session.js";
 import { bridgePath, getBridgeDir, getProjectName, resolveProjectRoot } from "./paths.js";
 import { getGitInfo } from "./git.js";
 import { pathExists, readTextIfExists, writeText } from "./fsx.js";
 import { redactSecrets } from "./redact.js";
 import { listApprovals } from "./safety.js";
+import { projectRootHint } from "./registry.js";
 import { generatedNotice } from "./templates.js";
+import type { ApprovalItem } from "./types.js";
 
 export interface InspectorOptions {
   maxCharsPerField?: number;
@@ -56,15 +60,25 @@ export interface ProjectInspectorSnapshot {
     progress_summary: string;
     result_summary: string;
     review_packet_summary: string;
+    review_packet_stale: boolean;
+    review_packet_stale_reason?: string;
     changed_file_summary: InspectorChangedFile[];
   };
   tests: {
     latest_summary: string;
     source: string;
+    stale: boolean;
+    stale_reason?: string;
+  };
+  repo_awareness: {
+    has_inventory: boolean;
+    known_limits: string[];
+    fresh_test_log_status: "present" | "missing" | "unknown";
   };
   safety: {
     pending_approvals: number;
     risk_flags: string[];
+    approvals: InspectorApproval[];
   };
   limits: {
     redacted: true;
@@ -73,6 +87,17 @@ export interface ProjectInspectorSnapshot {
     diff_truncated: boolean;
     max_chars_per_field: number;
   };
+}
+
+export interface InspectorApproval {
+  id: string;
+  action: string;
+  command?: string;
+  risk: string;
+  status: string;
+  stale: boolean;
+  actionable: boolean;
+  recommendation: string;
 }
 
 export interface CodexChangesSummary {
@@ -114,7 +139,33 @@ function redactForProject(root: string, input: string): string {
   if (localToken) {
     output = output.replace(new RegExp(escapeRegExp(localToken), "g"), "[REDACTED]");
   }
+  output = output.replace(new RegExp(escapeRegExp(root), "gi"), projectRootHint(root));
+  output = redactLocalPaths(output);
   return output;
+}
+
+function redactLocalPaths(input: string): string {
+  return input.replace(/\b[A-Za-z]:\\[^\r\n`"'<>|]+/g, (match) => {
+    const trailing = match.match(/[),.;:]+$/)?.[0] ?? "";
+    const core = trailing ? match.slice(0, -trailing.length) : match;
+    if (core.includes("\\...\\")) {
+      return match;
+    }
+    const parsed = path.win32.parse(core);
+    const name = path.win32.basename(core);
+    if (!parsed.root || !name) {
+      return match;
+    }
+    return `${path.win32.join(parsed.root, "...", name)}${trailing}`;
+  });
+}
+
+function normalizeUnprovenStatusClaims(input: string): string {
+  return input
+    .replace(/(## Commands Run\s*\r?\n\s*)-\s*Not run yet\./gi, "$1No fresh command log was found.")
+    .replace(/(## Tests\s*\r?\n\s*)Not run yet\./gi, "$1No fresh test log was found.")
+    .replace(/(\bTests:\s*)Not run yet\.?/gi, "$1No fresh test log was found.")
+    .replace(/(\bCommands Run:\s*)Not run yet\.?/gi, "$1No fresh command log was found.");
 }
 
 function truncateField(
@@ -124,7 +175,7 @@ function truncateField(
   maxChars: number,
   truncatedFields: string[]
 ): string {
-  const redacted = redactForProject(root, input).trim();
+  const redacted = normalizeUnprovenStatusClaims(redactForProject(root, input)).trim();
   if (!redacted) {
     return "";
   }
@@ -200,18 +251,84 @@ function recentTags(root: string): string[] {
   return splitLines(result.stdout).slice(0, 5);
 }
 
-function latestTestSummary(root: string, maxChars: number, truncatedFields: string[]): { latest_summary: string; source: string } {
+function latestTestSummary(
+  root: string,
+  maxChars: number,
+  truncatedFields: string[]
+): { latest_summary: string; source: string; stale: boolean; stale_reason?: string } {
   const logPath = bridgePath(root, "logs/latest_test.txt");
   if (!pathExists(logPath)) {
     return {
-      latest_summary: "No latest test log found.",
-      source: "missing"
+      latest_summary: "No fresh test log was found.",
+      source: "missing",
+      stale: true,
+      stale_reason: "No fresh test log was found."
     };
   }
 
   return {
-    latest_summary: readSummary(root, "logs/latest_test.txt", "No latest test log found.", "tests.latest_summary", maxChars, truncatedFields),
-    source: "logs/latest_test.txt"
+    latest_summary: readSummary(root, "logs/latest_test.txt", "No fresh test log was found.", "tests.latest_summary", maxChars, truncatedFields),
+    source: "logs/latest_test.txt",
+    stale: false
+  };
+}
+
+function bridgeMtime(root: string, fileName: string): number | undefined {
+  const filePath = bridgePath(root, fileName);
+  if (!pathExists(filePath)) {
+    return undefined;
+  }
+  return fs.statSync(filePath).mtimeMs;
+}
+
+function reviewPacketFreshness(root: string): { stale: boolean; stale_reason?: string } {
+  const reviewMtime = bridgeMtime(root, "chatgpt_review.md");
+  if (reviewMtime === undefined) {
+    return {
+      stale: true,
+      stale_reason: "No review packet file was found."
+    };
+  }
+
+  const newerData = [
+    "session.json",
+    "logs/latest_test.txt",
+    "codex_result.md",
+    "codex_progress.md",
+    "chatgpt_plan.md",
+    "project_context.md",
+    "approvals.json"
+  ]
+    .map((fileName) => bridgeMtime(root, fileName))
+    .filter((mtime): mtime is number => mtime !== undefined)
+    .some((mtime) => mtime > reviewMtime);
+
+  if (newerData) {
+    return {
+      stale: true,
+      stale_reason: "review packet older than current repo/session/test data"
+    };
+  }
+
+  return { stale: false };
+}
+
+function nonActionableApproval(approval: ApprovalItem): boolean {
+  return approval.risk === "high" && /\bgit\s+push\b.*\s--force(?:-with-lease)?\b/i.test(approval.command ?? "");
+}
+
+function approvalView(root: string, approval: ApprovalItem): InspectorApproval {
+  const stale = nonActionableApproval(approval);
+  const actionable = approval.status === "pending" && !stale;
+  return {
+    id: approval.id,
+    action: redactForProject(root, approval.action),
+    ...(approval.command ? { command: redactForProject(root, approval.command) } : {}),
+    risk: approval.risk,
+    status: approval.status,
+    stale,
+    actionable,
+    recommendation: actionable ? "Review locally before approving." : "Do not run this command."
   };
 }
 
@@ -230,8 +347,10 @@ export function createProjectInspectorSnapshot(
   const projectName = options.projectName ?? getProjectName(root);
   const git = getGitInfo(root, options.includeDiff ? "full" : "short");
   const changedFileSummary = git.available ? parseStatusFiles(git.status) : [];
-  const pendingApprovals = listApprovals(root, "pending");
+  const approvalViews = listApprovals(root).map((approval) => approvalView(root, approval));
+  const pendingApprovals = approvalViews.filter((approval) => approval.status === "pending" && approval.actionable);
   const tests = latestTestSummary(root, maxChars, truncatedFields);
+  const reviewFreshness = reviewPacketFreshness(root);
   const diffSummary = truncateField(root, "repo.diff_summary", git.diffStat, maxChars, truncatedFields) || "No diff.";
 
   const snapshot: ProjectInspectorSnapshot = {
@@ -239,7 +358,7 @@ export function createProjectInspectorSnapshot(
     project: {
       id: options.projectId ?? projectIdFromName(projectName),
       name: projectName,
-      root_hint: redactForProject(root, root),
+      root_hint: redactForProject(root, projectRootHint(root)),
       registered: Boolean(options.registered)
     },
     repo: {
@@ -301,6 +420,8 @@ export function createProjectInspectorSnapshot(
         maxChars,
         truncatedFields
       ),
+      review_packet_stale: reviewFreshness.stale,
+      ...(reviewFreshness.stale_reason ? { review_packet_stale_reason: reviewFreshness.stale_reason } : {}),
       changed_file_summary: changedFileSummary.map((file) => ({
         path: redactForProject(root, file.path),
         status: file.status,
@@ -308,11 +429,23 @@ export function createProjectInspectorSnapshot(
       }))
     },
     tests,
+    repo_awareness: {
+      has_inventory: false,
+      known_limits: [
+        "inspectProject does not perform a full project inventory. Call getProjectTree for inventory, classification, candidates, and coverage warnings.",
+        tests.stale ? "No fresh test log was found." : "Fresh test log metadata is available."
+      ],
+      fresh_test_log_status: tests.source === "missing" ? "missing" : tests.stale ? "unknown" : "present"
+    },
     safety: {
       pending_approvals: pendingApprovals.length,
-      risk_flags: pendingApprovals.map((approval) =>
-        redactForProject(root, `${approval.risk}: ${approval.action}${approval.command ? ` (${approval.command})` : ""}`)
-      )
+      risk_flags: approvalViews.map((approval) =>
+        redactForProject(
+          root,
+          `${approval.risk}: ${approval.action}${approval.command ? ` (${approval.command})` : ""}; actionable=${approval.actionable}; stale=${approval.stale}; recommendation=${approval.recommendation}`
+        )
+      ),
+      approvals: approvalViews
     },
     limits: {
       redacted: true,

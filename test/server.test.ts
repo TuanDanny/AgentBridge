@@ -7,6 +7,7 @@ import { readLocalToken } from "../src/auth.js";
 import { captureProject } from "../src/core.js";
 import { requestJson } from "../src/httpJson.js";
 import { registerProject } from "../src/registry.js";
+import { createApproval } from "../src/safety.js";
 import { startAgentBridgeServer, type RunningAgentBridgeServer } from "../src/server.js";
 
 const tempRoots: string[] = [];
@@ -273,6 +274,96 @@ describe("local daemon", () => {
     expect(review.body.review_packet.summary).toContain("Registered review.");
   });
 
+  it("redacts project review packets and marks force-push approvals non-actionable", async () => {
+    const serverRoot = makeTempRoot();
+    const projectRoot = makeTempRoot();
+    captureProject(projectRoot, "short");
+    const projectLocalToken = "project-local-token-1234567890";
+    fs.writeFileSync(path.join(projectRoot, ".agentbridge", "local_token"), projectLocalToken, "utf8");
+    const reviewPath = path.join(projectRoot, ".agentbridge", "chatgpt_review.md");
+    fs.writeFileSync(
+      reviewPath,
+      [
+        "# Review",
+        "",
+        `Root: ${projectRoot}`,
+        "## Commands Run",
+        "",
+        "- Not run yet.",
+        "",
+        "## Tests",
+        "",
+        "Not run yet.",
+        "",
+        `local_token=${projectLocalToken}`,
+        "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+        "OPENAI_API_KEY=sk-123456789012345678901234",
+        "-----BEGIN PRIVATE KEY-----",
+        "private-body",
+        "-----END PRIVATE KEY-----"
+      ].join("\n"),
+      "utf8"
+    );
+    fs.writeFileSync(path.join(projectRoot, ".agentbridge", "codex_result.md"), "Result after review.", "utf8");
+    const oldDate = new Date(Date.now() - 10_000);
+    fs.utimesSync(reviewPath, oldDate, oldDate);
+    createApproval(projectRoot, {
+      action: "run_command",
+      command: "git push --force",
+      reason: "Rejected by stale safety review.",
+      risk: "high"
+    });
+    registerProject(serverRoot, "ReviewProject", projectRoot);
+    const running = await startAgentBridgeServer(serverRoot, { port: 0 });
+    runningServers.push(running);
+    const token = readLocalToken(serverRoot);
+
+    const inspect = await requestJson<{ ok: boolean; project: { root_hint: string }; codex: { review_packet_summary: string; review_packet_stale: boolean }; safety: { pending_approvals: number; approvals: Array<{ actionable: boolean; stale: boolean; recommendation: string }> } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/ReviewProject/inspect",
+      token
+    });
+    expect(inspect.status).toBe(200);
+    expect(inspect.body.project.root_hint).toContain(path.basename(projectRoot));
+    expect(inspect.body.project.root_hint).not.toBe(path.resolve(projectRoot));
+    expect(inspect.body.codex.review_packet_stale).toBe(true);
+    expect(inspect.body.safety.pending_approvals).toBe(0);
+    expect(inspect.body.safety.approvals[0]).toMatchObject({
+      actionable: false,
+      stale: true,
+      recommendation: "Do not run this command."
+    });
+
+    const review = await requestJson<{ ok: boolean; review_packet: { root_hint: string; summary: string; stale: boolean; stale_reason?: string; tests: { stale: boolean; latest_summary: string }; approvals: Array<{ actionable: boolean; stale: boolean; recommendation: string }> } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/ReviewProject/review-packet",
+      token
+    });
+    const serialized = JSON.stringify({ inspect: inspect.body, review: review.body });
+    expect(review.status).toBe(200);
+    expect(review.body.review_packet.root_hint).toContain(path.basename(projectRoot));
+    expect(review.body.review_packet.root_hint).not.toBe(path.resolve(projectRoot));
+    expect(review.body.review_packet.stale).toBe(true);
+    expect(review.body.review_packet.stale_reason).toBe("review packet older than current repo/session/test data");
+    expect(review.body.review_packet.summary).toContain("No fresh command log was found.");
+    expect(review.body.review_packet.summary).toContain("No fresh test log was found.");
+    expect(review.body.review_packet.tests.latest_summary).toBe("No fresh test log was found.");
+    expect(review.body.review_packet.tests.stale).toBe(true);
+    expect(review.body.review_packet.approvals[0]).toMatchObject({
+      actionable: false,
+      stale: true,
+      recommendation: "Do not run this command."
+    });
+    expect(serialized).not.toContain(path.resolve(projectRoot));
+    expect(serialized).not.toContain(projectLocalToken);
+    expect(serialized).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(serialized).not.toContain("sk-123456789012345678901234");
+    expect(serialized).not.toContain("private-body");
+    expect(serialized).not.toContain("- Not run yet.");
+  });
+
   it("returns multiple explicitly registered projects", async () => {
     const serverRoot = makeTempRoot();
     const parentA = makeTempRoot();
@@ -370,7 +461,7 @@ describe("local daemon", () => {
       token
     });
     expect(review.status).toBe(200);
-    expect(review.body.review).toContain("No ChatGPT review packet found");
+    expect(review.body.review).toContain("No ChatGPT review packet");
   });
 
   it("returns a useful ChatGPT context fallback when context has not been captured", async () => {
@@ -674,7 +765,19 @@ describe("local daemon", () => {
     const denied = await requestJson({ host: running.info.host, port: running.info.port, path: "/chatgpt/projects/GammaProject/tree" });
     expect(denied.status).toBe(401);
 
-    const tree = await requestJson<{ ok: boolean; entries: Array<{ path: string }>; root_hint: string; total_files: number; total_folders: number }>(
+    const tree = await requestJson<{
+      ok: boolean;
+      entries: Array<{ path: string }>;
+      root_hint: string;
+      total_files: number;
+      total_folders: number;
+      inventory: { complete: boolean; scale_hint: string; tree_truncated: boolean };
+      classification: { generated_dirs: string[]; vendor_dirs: string[]; tooling_dirs: string[] };
+      important_candidates: Array<{ path: string; reason: string; priority: string }>;
+      recommended_next_reads: Array<{ path: string; why: string }>;
+      coverage_warning: { level: string; message: string } | null;
+      recommended_next_action: string | null;
+    }>(
       {
       host: running.info.host,
       port: running.info.port,
@@ -693,6 +796,16 @@ describe("local daemon", () => {
     expect(tree.body.entries.some((entry) => entry.path.includes("build"))).toBe(false);
     expect(tree.body.root_hint).toContain(path.basename(projectRoot));
     expect(tree.body.root_hint).not.toBe(projectRoot);
+    expect(tree.body.inventory.scale_hint).toBe("small");
+    expect(tree.body.inventory.complete).toBe(true);
+    expect(tree.body.inventory.tree_truncated).toBe(false);
+    expect(tree.body.classification.generated_dirs).toEqual(expect.arrayContaining(["build", "dist"]));
+    expect(tree.body.classification.vendor_dirs).toContain("node_modules");
+    expect(tree.body.classification.tooling_dirs).toContain(".git");
+    expect(Array.isArray(tree.body.important_candidates)).toBe(true);
+    expect(Array.isArray(tree.body.recommended_next_reads)).toBe(true);
+    expect(tree.body.coverage_warning).toBeNull();
+    expect(tree.body.recommended_next_action === null || tree.body.recommended_next_action.includes("Read")).toBe(true);
 
     const shallowTree = await requestJson<{ entries: Array<{ path: string }> }>({
       host: running.info.host,
@@ -703,7 +816,7 @@ describe("local daemon", () => {
     expect(shallowTree.status).toBe(200);
     expect(shallowTree.body.entries.map((entry) => entry.path)).not.toContain(targetFile);
 
-    const tinyTree = await requestJson<{ returned_entries: number; truncated: boolean }>({
+    const tinyTree = await requestJson<{ returned_entries: number; truncated: boolean; inventory: { complete: boolean; tree_truncated: boolean }; coverage_warning: { level: string; message: string } | null }>({
       host: running.info.host,
       port: running.info.port,
       path: "/chatgpt/projects/GammaProject/tree?max_depth=4&max_entries=1",
@@ -712,6 +825,9 @@ describe("local daemon", () => {
     expect(tinyTree.status).toBe(200);
     expect(tinyTree.body.returned_entries).toBe(1);
     expect(tinyTree.body.truncated).toBe(true);
+    expect(tinyTree.body.inventory.complete).toBe(false);
+    expect(tinyTree.body.inventory.tree_truncated).toBe(true);
+    expect(tinyTree.body.coverage_warning?.level).toBe("partial");
 
     const search = await requestJson<{ matches: Array<{ path: string }> }>({
       host: running.info.host,
@@ -731,7 +847,7 @@ describe("local daemon", () => {
     expect(nestedSearch.status).toBe(200);
     expect(nestedSearch.body.matches.map((match) => match.path)).toEqual([targetFile]);
 
-    const read = await requestJson<{ content: string; path: string; redacted: boolean }>({
+    const read = await requestJson<{ content: string; path: string; redacted: boolean; read_status: string; line_count: number; bytes_returned: number; coverage_warning: string | null }>({
       host: running.info.host,
       port: running.info.port,
       path: `/chatgpt/projects/GammaProject/file?path=${encodeURIComponent(noteFile)}`,
@@ -741,6 +857,10 @@ describe("local daemon", () => {
     expect(read.body.path).toBe(noteFile);
     expect(read.body.content).toContain(token);
     expect(read.body.redacted).toBe(false);
+    expect(read.body.read_status).toBe("complete");
+    expect(read.body.line_count).toBeGreaterThan(0);
+    expect(read.body.bytes_returned).toBe(Buffer.byteLength(read.body.content));
+    expect(read.body.coverage_warning).toBeNull();
 
     const grep = await requestJson<{ matches: Array<{ path: string; snippet: string }> }>({
       host: running.info.host,
@@ -771,7 +891,7 @@ describe("local daemon", () => {
     expect(redactedRead.body.content).toContain("Bearer [REDACTED]");
     expect(redactedRead.body.redacted).toBe(true);
 
-    const largeRead = await requestJson<{ ok: boolean; content: string; truncated: boolean; redacted: boolean; size: number }>({
+    const largeRead = await requestJson<{ ok: boolean; content: string; truncated: boolean; redacted: boolean; size: number; read_status: string; line_count_estimate: number; coverage_warning: string | null }>({
       host: running.info.host,
       port: running.info.port,
       path: `/chatgpt/projects/GammaProject/file?path=${encodeURIComponent(largeFile)}`,
@@ -780,6 +900,9 @@ describe("local daemon", () => {
     expect(largeRead.status).toBe(200);
     expect(largeRead.body.ok).toBe(true);
     expect(largeRead.body.truncated).toBe(true);
+    expect(largeRead.body.read_status).toBe("partial");
+    expect(largeRead.body.line_count_estimate).toBeGreaterThan(0);
+    expect(largeRead.body.coverage_warning).toContain("Only part");
     expect(largeRead.body.size).toBe(Buffer.byteLength(largeContent));
     expect(largeRead.body.content.length).toBeGreaterThan(0);
     expect(largeRead.body.content.length).toBeLessThan(largeContent.length);
@@ -797,14 +920,26 @@ describe("local daemon", () => {
       "secret.pem",
       "binary.bin"
     ]) {
-      const blocked = await requestJson({
+      const blocked = await requestJson<{ ok: boolean; read_status: string; coverage_warning: string; blocked_reason?: string; error: { code: string } }>({
         host: running.info.host,
         port: running.info.port,
         path: `/chatgpt/projects/GammaProject/file?path=${unsafePath}`,
         token: localToken
       });
       expect(blocked.status).toBe(400);
+      expect(["blocked", "binary", "error"]).toContain(blocked.body.read_status);
+      expect(blocked.body.coverage_warning).toContain("not read");
     }
+
+    const missingFile = await requestJson<{ ok: boolean; read_status: string; coverage_warning: string; error: { code: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/GammaProject/file?path=missing-file.txt",
+      token: localToken
+    });
+    expect(missingFile.status).toBe(404);
+    expect(missingFile.body.read_status).toBe("not_found");
+    expect(missingFile.body.coverage_warning).toContain("not found");
 
     const unknown = await requestJson({ host: running.info.host, port: running.info.port, path: "/chatgpt/projects/MissingProject/tree", token: localToken });
     expect(unknown.status).toBe(404);

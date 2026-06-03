@@ -1,6 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { IGNORED_DIRECTORIES } from "./discovery.js";
+import {
+  buildCoverageWarning,
+  buildInventory,
+  classifyTopLevelEntries,
+  detectSuspiciousRootFiles,
+  findImportantCandidates,
+  findRecommendedNextReads,
+  recommendedNextAction,
+  type CoverageWarning,
+  type ImportantCandidate,
+  type ProjectClassification,
+  type ProjectInventory,
+  type RecommendedRead,
+  type SuspiciousRootFile
+} from "./projectAwareness.js";
 import { projectRootHint } from "./registry.js";
 import { redactSecrets } from "./redact.js";
 
@@ -55,6 +70,13 @@ export interface ProjectTreeResult {
   truncated: boolean;
   ignored_dirs: string[];
   entries: ProjectFileEntry[];
+  inventory: ProjectInventory;
+  classification: ProjectClassification;
+  important_candidates: ImportantCandidate[];
+  recommended_next_reads: RecommendedRead[];
+  suspicious_root_files: SuspiciousRootFile[];
+  coverage_warning: CoverageWarning | null;
+  recommended_next_action: string | null;
 }
 
 export interface ProjectFileSearchResult {
@@ -72,6 +94,12 @@ export interface ProjectFileReadResult {
   size: number;
   encoding: "utf-8";
   truncated: boolean;
+  read_status: "complete" | "partial";
+  line_count?: number;
+  line_count_estimate?: number;
+  line_range_returned: [number, number] | null;
+  bytes_returned: number;
+  coverage_warning: string | null;
   redacted: boolean;
   content: string;
 }
@@ -104,7 +132,7 @@ export class ProjectFileError extends Error {
 }
 
 const DEFAULT_TREE_DEPTH = 4;
-const DEFAULT_TREE_ENTRIES = 500;
+const DEFAULT_TREE_ENTRIES = 3000;
 const DEFAULT_SEARCH_DEPTH = 8;
 const DEFAULT_SEARCH_RESULTS = 50;
 const DEFAULT_MAX_READ_BYTES = 512 * 1024;
@@ -141,10 +169,13 @@ export function getProjectTree(root: string, options: ProjectTreeOptions): Proje
   const includeHidden = options.includeHidden ?? false;
   const includeSizes = options.includeSizes ?? true;
   const entries: ProjectFileEntry[] = [];
+  const skippedTopLevelDirs: string[] = [];
   const queue: Array<{ absolutePath: string; relativePath: string; depth: number }> = [{ absolutePath: projectRoot, relativePath: "", depth: 0 }];
   let totalFiles = 0;
   let totalFolders = 0;
+  let bytesEstimate = 0;
   let truncated = false;
+  let depthLimited = false;
 
   while (queue.length) {
     const current = queue.shift();
@@ -160,12 +191,18 @@ export function getProjectTree(root: string, options: ProjectTreeOptions): Proje
     }
 
     for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (child.isSymbolicLink() || shouldIgnoreName(child.name, includeHidden)) {
+      const childRelative = toPosixPath(path.join(current.relativePath, child.name));
+      const childAbsolute = path.join(current.absolutePath, child.name);
+      if (child.isSymbolicLink()) {
+        continue;
+      }
+      if (shouldIgnoreName(child.name, includeHidden)) {
+        if (child.isDirectory() && !current.relativePath) {
+          skippedTopLevelDirs.push(childRelative);
+        }
         continue;
       }
 
-      const childRelative = toPosixPath(path.join(current.relativePath, child.name));
-      const childAbsolute = path.join(current.absolutePath, child.name);
       if (isSensitiveRelativePath(childRelative)) {
         continue;
       }
@@ -177,16 +214,21 @@ export function getProjectTree(root: string, options: ProjectTreeOptions): Proje
         } else {
           truncated = true;
         }
+        if (current.depth + 1 >= maxDepth && hasVisibleChildren(childAbsolute, includeHidden)) {
+          depthLimited = true;
+        }
         queue.push({ absolutePath: childAbsolute, relativePath: childRelative, depth: current.depth + 1 });
         continue;
       }
 
       if (child.isFile()) {
         totalFiles += 1;
+        const size = safeStatSize(childAbsolute);
+        bytesEstimate += size;
         if (entries.length < maxEntries) {
           const entry: ProjectFileEntry = { path: childRelative, type: "file" };
           if (includeSizes) {
-            entry.size = safeStatSize(childAbsolute);
+            entry.size = size;
           }
           entries.push(entry);
         } else {
@@ -195,6 +237,24 @@ export function getProjectTree(root: string, options: ProjectTreeOptions): Proje
       }
     }
   }
+
+  const treeTruncated = truncated || depthLimited;
+  const inventory = buildInventory({
+    totalFiles,
+    totalDirs: totalFolders,
+    treeTruncated,
+    maxDepth,
+    maxEntries,
+    bytesEstimate
+  });
+  const classification = classifyTopLevelEntries(entries, skippedTopLevelDirs);
+  const importantCandidates = findImportantCandidates(entries, classification);
+  const recommendedReads = findRecommendedNextReads(importantCandidates);
+  const coverageWarning = buildCoverageWarning({
+    inventoryComplete: inventory.complete,
+    treeTruncated: inventory.tree_truncated,
+    scaleHint: inventory.scale_hint
+  });
 
   return {
     ok: true,
@@ -205,9 +265,16 @@ export function getProjectTree(root: string, options: ProjectTreeOptions): Proje
     total_files: totalFiles,
     total_folders: totalFolders,
     returned_entries: entries.length,
-    truncated,
+    truncated: treeTruncated,
     ignored_dirs: [...IGNORED_DIRECTORIES].sort(),
-    entries
+    entries,
+    inventory,
+    classification,
+    important_candidates: importantCandidates,
+    recommended_next_reads: recommendedReads,
+    suspicious_root_files: detectSuspiciousRootFiles(entries),
+    coverage_warning: coverageWarning,
+    recommended_next_action: recommendedNextAction({ coverageWarning, recommendedReads })
   };
 }
 
@@ -253,13 +320,27 @@ export function readProjectFile(root: string, options: ProjectFileReadOptions): 
   }
 
   const maxChars = options.maxChars === undefined ? undefined : boundedInteger(options.maxChars, "max_chars", 1, HARD_MAX_READ_BYTES);
-  let content = readUtf8Prefix(safePath.absolutePath, Math.min(stat.size, DEFAULT_MAX_READ_BYTES));
+  const byteLimit = Math.min(stat.size, DEFAULT_MAX_READ_BYTES);
+  const prefixContent = readUtf8Prefix(safePath.absolutePath, byteLimit);
+  const fileTruncated = stat.size > DEFAULT_MAX_READ_BYTES;
+  const prefixLineCount = countLines(prefixContent);
+  let content = prefixContent;
+  let lineRangeReturned: [number, number] | null = prefixLineCount > 0 ? [1, prefixLineCount] : null;
+  let lineWindowApplied = false;
   if (options.startLine !== undefined || options.numLines !== undefined) {
-    content = lineWindow(content, options.startLine, options.numLines);
+    const window = lineWindow(content, options.startLine, options.numLines);
+    content = window.content;
+    lineRangeReturned = window.lineRange;
+    lineWindowApplied = true;
   }
   const redactedContent = redactSecrets(content);
   const charTruncated = maxChars !== undefined && redactedContent.length > maxChars;
-  const truncated = stat.size > DEFAULT_MAX_READ_BYTES || charTruncated;
+  const finalContent = charTruncated ? redactedContent.slice(0, maxChars ?? redactedContent.length) : redactedContent;
+  if (charTruncated) {
+    lineRangeReturned = returnedLineRange(finalContent, lineRangeReturned?.[0] ?? 1);
+  }
+  const truncated = fileTruncated || charTruncated || lineWindowApplied;
+  const readStatus = truncated ? "partial" : "complete";
   return {
     ok: true,
     project_id: options.projectId,
@@ -267,8 +348,14 @@ export function readProjectFile(root: string, options: ProjectFileReadOptions): 
     size: stat.size,
     encoding: "utf-8",
     truncated,
+    read_status: readStatus,
+    ...(!fileTruncated ? { line_count: prefixLineCount } : { line_count_estimate: estimateLineCount(prefixLineCount, byteLimit, stat.size) }),
+    line_range_returned: lineRangeReturned,
+    bytes_returned: Buffer.byteLength(finalContent, "utf8"),
+    coverage_warning:
+      readStatus === "partial" ? "Only part of this file was returned. Do not claim the whole file was read." : null,
     redacted: redactedContent !== content,
-    content: charTruncated ? redactedContent.slice(0, maxChars ?? redactedContent.length) : redactedContent
+    content: finalContent
   };
 }
 
@@ -447,6 +534,23 @@ function shouldIgnoreName(name: string, includeHidden: boolean): boolean {
   return !includeHidden && name.startsWith(".");
 }
 
+function hasVisibleChildren(directoryPath: string, includeHidden: boolean): boolean {
+  try {
+    for (const child of fs.readdirSync(directoryPath, { withFileTypes: true })) {
+      if (child.isSymbolicLink() || shouldIgnoreName(child.name, includeHidden)) {
+        continue;
+      }
+      if (isSensitiveRelativePath(child.name)) {
+        continue;
+      }
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function isSensitiveRelativePath(relativePath: string): boolean {
   const normalized = toPosixPath(relativePath).toLowerCase();
   const basename = path.posix.basename(normalized);
@@ -532,12 +636,35 @@ function redactSearchSnippet(input: string, query: string, caseSensitive: boolea
   return output;
 }
 
-function lineWindow(content: string, startLineInput?: number, numLinesInput?: number): string {
+function lineWindow(content: string, startLineInput?: number, numLinesInput?: number): { content: string; lineRange: [number, number] | null } {
   const startLine = startLineInput === undefined ? 1 : boundedInteger(startLineInput, "start_line", 1, 1000000);
   const numLines = numLinesInput === undefined ? undefined : boundedInteger(numLinesInput, "num_lines", 1, 100000);
   const lines = content.split(/\r?\n/);
   const startIndex = startLine - 1;
-  return lines.slice(startIndex, numLines === undefined ? undefined : startIndex + numLines).join("\n");
+  const returnedLines = lines.slice(startIndex, numLines === undefined ? undefined : startIndex + numLines);
+  return {
+    content: returnedLines.join("\n"),
+    lineRange: returnedLines.length ? [startLine, startLine + returnedLines.length - 1] : null
+  };
+}
+
+function countLines(content: string): number {
+  if (!content) {
+    return 0;
+  }
+  return content.split(/\r?\n/).length;
+}
+
+function returnedLineRange(content: string, startLine: number): [number, number] | null {
+  const lines = countLines(content);
+  return lines ? [startLine, startLine + lines - 1] : null;
+}
+
+function estimateLineCount(prefixLineCount: number, bytesRead: number, totalBytes: number): number {
+  if (prefixLineCount === 0 || bytesRead === 0) {
+    return 0;
+  }
+  return Math.max(prefixLineCount, Math.ceil((prefixLineCount * totalBytes) / bytesRead));
 }
 
 function requiredQuery(query: string): string {
