@@ -246,12 +246,18 @@ function resolveCliSessionProject(id?: string): string {
   }
 
   const registeredProjects = listProjects(process.cwd());
+  const currentProjectId = projectIdFromRoot(process.cwd());
+  const currentRegisteredProject = registeredProjects.find((project) => project.id.toLowerCase() === currentProjectId.toLowerCase());
+  if (currentRegisteredProject) {
+    return currentRegisteredProject.id;
+  }
+
   if (registeredProjects.length === 1) {
     return registeredProjects[0].id;
   }
 
   if (!registeredProjects.length) {
-    return projectIdFromRoot(process.cwd());
+    return currentProjectId;
   }
 
   throw new Error("No active project selected. Run agentbridge project select <id> or pass a project id.");
