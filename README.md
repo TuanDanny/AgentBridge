@@ -221,6 +221,18 @@ OKKK - v0.5-gamma/v0.5-delta full workflow acceptance passed
 
 ---
 
+## Documentation
+
+Additional docs live under `docs/`:
+
+- `docs/guides/` for bridge, tunnel, and companion workflows.
+- `docs/architecture/` for inspector and registry design notes.
+- `docs/specs/` for MCP, safety, and protocol specs.
+- `docs/gpt/` for GPT Actions setup and instructions.
+- `docs/acceptance/` for milestone acceptance records.
+
+---
+
 ## Notes
 
 - CodexLink does not require an OpenAI API key.

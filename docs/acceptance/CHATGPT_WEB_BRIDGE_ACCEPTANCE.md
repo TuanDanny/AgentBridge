@@ -53,7 +53,7 @@ Results:
 [x] /chatgpt/next-task works with token
 [x] /chatgpt/classify-command blocks rm -rf node_modules
 [x] Existing STDIO MCP tests still pass
-[x] CHATGPT_WEB_BRIDGE.md exists
+[x] docs/guides/CHATGPT_WEB_BRIDGE.md exists
 [x] README.md updated
 [x] No API key required
 [x] No cloud/team mode added
