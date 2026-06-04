@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AgentBridge GPT Actions Project Inspector",
-    "version": "0.5.0-delta",
+    "version": "0.6.0-beta",
     "description": "GPT Actions compatible OpenAPI schema for AgentBridge Project Inspector and safe project browser JSON endpoints. This is not MCP and does not define a /mcp endpoint."
   },
   "servers": [
@@ -127,6 +127,405 @@
           },
           "401": {
             "description": "Missing or invalid bearer token"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/session": {
+      "get": {
+        "operationId": "getProjectSession",
+        "summary": "Get project session",
+        "description": "Get or create the shared workspace session for one project. Returns active session, state, and summary without raw file content or secrets.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Get project session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project or handoff not found"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/session/summary": {
+      "get": {
+        "operationId": "getSessionSummary",
+        "summary": "Get session summary",
+        "description": "Get the compact shared session summary for one project. Use it as source of truth for goal, phase, handoffs, next steps, and warnings.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Get session summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project or handoff not found"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/session/updates": {
+      "get": {
+        "operationId": "getSessionUpdates",
+        "summary": "Get session updates",
+        "description": "Get shared session events and handoffs after a revision. Use this to resume a new chat without relying on old chat memory.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since_revision",
+            "in": "query",
+            "required": false,
+            "description": "Return session updates after this revision. Defaults to 0.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Get session updates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project or handoff not found"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/session/events": {
+      "post": {
+        "operationId": "appendSessionEvent",
+        "summary": "Append session event",
+        "description": "Append a redacted shared session event. Valid actors are user, chatgpt, codex, and system. Raw file content and secrets are not stored.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Append session event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project or handoff not found"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/session/handoffs": {
+      "post": {
+        "operationId": "addSessionHandoff",
+        "summary": "Add session handoff",
+        "description": "Add a redacted handoff between ChatGPT and Codex. Use this when one side needs the other to continue work on the same session.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Add session handoff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project or handoff not found"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/session/handoffs/{handoffId}": {
+      "post": {
+        "operationId": "updateSessionHandoff",
+        "summary": "Update session handoff",
+        "description": "Update one shared session handoff status or result summary. Does not run commands, edit files, push, tag, or release.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "handoffId",
+            "in": "path",
+            "required": true,
+            "description": "Session handoff id returned by addSessionHandoff.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Update session handoff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project or handoff not found"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/session/goal": {
+      "post": {
+        "operationId": "setSessionGoal",
+        "summary": "Set session goal",
+        "description": "Set the current shared session goal, phase, and status. Input is redacted and truncated before local storage.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe projectId returned by listProjects. Raw filesystem paths are not accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Set session goal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Project or handoff not found"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
           }
         }
       }

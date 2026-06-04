@@ -57,6 +57,13 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
     expect(spec.paths["/chatgpt/projects/{projectId}/grep"].get.operationId).toBe("searchProjectText");
     expect(spec.paths["/chatgpt/projects/{projectId}/select"].post.operationId).toBe("selectProject");
     expect(spec.paths["/chatgpt/active-project"].get.operationId).toBe("getActiveProject");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session"].get.operationId).toBe("getProjectSession");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/summary"].get.operationId).toBe("getSessionSummary");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/updates"].get.operationId).toBe("getSessionUpdates");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/events"].post.operationId).toBe("appendSessionEvent");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/handoffs"].post.operationId).toBe("addSessionHandoff");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/handoffs/{handoffId}"].post.operationId).toBe("updateSessionHandoff");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/goal"].post.operationId).toBe("setSessionGoal");
     expect(spec.paths["/chatgpt/projects/{projectId}/inspect"].get.operationId).toBe("inspectProject");
     expect(spec.paths["/chatgpt/projects/{projectId}/codex-changes"].get.operationId).toBe("getCodexChanges");
     expect(spec.paths["/chatgpt/projects/{projectId}/review-packet"].get.operationId).toBe("getReviewPacket");
@@ -95,6 +102,13 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
     expect(Object.keys(spec.paths)).toEqual([
       "/chatgpt/projects",
       "/chatgpt/active-project",
+      "/chatgpt/projects/{projectId}/session",
+      "/chatgpt/projects/{projectId}/session/summary",
+      "/chatgpt/projects/{projectId}/session/updates",
+      "/chatgpt/projects/{projectId}/session/events",
+      "/chatgpt/projects/{projectId}/session/handoffs",
+      "/chatgpt/projects/{projectId}/session/handoffs/{handoffId}",
+      "/chatgpt/projects/{projectId}/session/goal",
       "/chatgpt/projects/{projectId}/tree",
       "/chatgpt/projects/{projectId}/files/search",
       "/chatgpt/projects/{projectId}/file",
@@ -114,6 +128,13 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
     expect(spec.paths["/chatgpt/projects/{projectId}/grep"].get.operationId).toBe("searchProjectText");
     expect(spec.paths["/chatgpt/projects/{projectId}/select"].post.operationId).toBe("selectProject");
     expect(spec.paths["/chatgpt/active-project"].get.operationId).toBe("getActiveProject");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session"].get.operationId).toBe("getProjectSession");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/summary"].get.operationId).toBe("getSessionSummary");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/updates"].get.operationId).toBe("getSessionUpdates");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/events"].post.operationId).toBe("appendSessionEvent");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/handoffs"].post.operationId).toBe("addSessionHandoff");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/handoffs/{handoffId}"].post.operationId).toBe("updateSessionHandoff");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/goal"].post.operationId).toBe("setSessionGoal");
     expect(spec.paths["/chatgpt/projects/{projectId}/inspect"].get.operationId).toBe("inspectProject");
     expect(spec.paths["/chatgpt/projects/{projectId}/codex-changes"].get.operationId).toBe("getCodexChanges");
     expect(spec.paths["/chatgpt/projects/{projectId}/review-packet"].get.operationId).toBe("getReviewPacket");

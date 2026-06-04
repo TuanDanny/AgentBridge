@@ -14,6 +14,19 @@ For follow-up requests such as "read the README", "search config", or "show file
 
 Never assume AgentBridge is selected when multiple projects exist. Never pass raw local filesystem paths as `projectId`. Use only IDs returned by `listProjects`.
 
+Shared session rules:
+
+```text
+- At the start of any new chat about a CodexLink project, call listProjects if the project is unknown, then getActiveProject if needed.
+- Call getSessionSummary for the selected or active project before claiming current goal, decisions, next steps, do_not_do, or handoff state.
+- Treat the shared session summary as the source of truth for current workspace state.
+- If the user changes direction, call appendSessionEvent with type correction or decision.
+- If Codex should continue work, call addSessionHandoff instead of relying on chat memory.
+- Use getSessionUpdates when resuming from a known revision.
+- Do not claim session knowledge before reading the session.
+- Do not store raw code/file content, secrets, tokens, .env values, local_token values, or private keys in session events or handoffs.
+```
+
 Safe file access rules:
 
 ```text

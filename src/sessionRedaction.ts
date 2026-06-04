@@ -22,10 +22,12 @@ export function sanitizeSessionText(input: unknown, maxChars: number): Sanitized
 }
 
 function redactSessionAssignments(input: string): string {
-  return input.replace(
-    /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*?(?:KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CLIENT_SECRET|AUTH|JWT)[A-Za-z0-9_]*\s*[:=]\s*(?:"?\[REDACTED\]"?)\s*$/gim,
-    "[REDACTED]"
-  );
+  return input
+    .replace(
+      /\b(?:[A-Za-z_][A-Za-z0-9_]*?(?:KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CLIENT_SECRET|AUTH|JWT)[A-Za-z0-9_]*|KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CLIENT_SECRET|AUTH|JWT)\s*[:=]\s*(?:"?\[REDACTED\]"?)/gim,
+      "[REDACTED]"
+    )
+    .replace(/^\s*(?:export\s+)?\[REDACTED\]\s*$/gim, "[REDACTED]");
 }
 
 export function sanitizeSessionTextArray(input: unknown, maxItems: number, maxChars: number): {

@@ -13,6 +13,17 @@ import { redactSecrets } from "./redact.js";
 import { findProject, listProjects, projectIdFromRoot, projectRootHint, touchProject, validateProjectId, type RegisteredProject } from "./registry.js";
 import { classifyCommand, createApproval, listApprovals, resolveApproval } from "./safety.js";
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
+import {
+  addSessionHandoff,
+  appendSessionEvent,
+  getProjectSession,
+  getSessionSummary,
+  getSessionUpdates,
+  SessionStoreError,
+  setSessionGoal,
+  updateSessionHandoff
+} from "./sessionStore.js";
+import type { SessionActor, SessionCurrentStatus, SessionEventType, SessionHandoffStatus, SessionPhase } from "./sessionTypes.js";
 import type { AgentBridgeSession, RiskLevel, ServerInfo, ServerOptions } from "./types.js";
 import { readActiveProject, selectActiveProject } from "./activeProject.js";
 
@@ -98,6 +109,36 @@ function stringField(body: unknown, field: string): string | undefined {
 
   const value = (body as Record<string, unknown>)[field];
   return typeof value === "string" ? value : undefined;
+}
+
+function stringArrayField(body: unknown, field: string): string[] | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+
+  const value = (body as Record<string, unknown>)[field];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error(`${field} must be an array of strings.`);
+  }
+  return value;
+}
+
+function numberField(body: unknown, field: string): number | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+
+  const value = (body as Record<string, unknown>)[field];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative integer.`);
+  }
+  return value;
 }
 
 function isRiskLevel(value: string): value is RiskLevel {
@@ -241,6 +282,22 @@ function sendProjectFileError(response: http.ServerResponse, error: unknown): vo
 
   const message = error instanceof Error ? error.message : String(error);
   sendJson(response, 400, { ok: false, error: { code: "invalid_query", message } });
+}
+
+function sendSessionStoreError(response: http.ServerResponse, error: unknown): void {
+  if (error instanceof SessionStoreError) {
+    sendJson(response, error.status, {
+      ok: false,
+      error: {
+        code: error.code,
+        message: error.message
+      }
+    });
+    return;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  sendJson(response, 400, { ok: false, error: { code: "invalid_session_request", message } });
 }
 
 function projectFileErrorCoverage(error: ProjectFileError): {
@@ -438,6 +495,228 @@ export async function startAgentBridgeServer(
         const active = selectActiveProject(root, projectId, "chatgpt_action");
         appendAudit(root, "http.chatgpt.project.select", { project_id: projectId });
         sendJson(response, 200, active);
+        return;
+      }
+
+      const sessionRoute = /^\/chatgpt\/projects\/([^/]+)\/session$/.exec(url.pathname);
+      if (request.method === "GET" && sessionRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(sessionRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(response, 200, getProjectSession(root, project.id));
+        } catch (error) {
+          sendSessionStoreError(response, error);
+        }
+        return;
+      }
+
+      const sessionSummaryRoute = /^\/chatgpt\/projects\/([^/]+)\/session\/summary$/.exec(url.pathname);
+      if (request.method === "GET" && sessionSummaryRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(sessionSummaryRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(response, 200, { ok: true, summary: getSessionSummary(root, project.id) });
+        } catch (error) {
+          sendSessionStoreError(response, error);
+        }
+        return;
+      }
+
+      const sessionUpdatesRoute = /^\/chatgpt\/projects\/([^/]+)\/session\/updates$/.exec(url.pathname);
+      if (request.method === "GET" && sessionUpdatesRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(sessionUpdatesRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(response, 200, getSessionUpdates(root, project.id, queryInteger(url, "since_revision") ?? 0));
+        } catch (error) {
+          sendSessionStoreError(response, error);
+        }
+        return;
+      }
+
+      const sessionEventRoute = /^\/chatgpt\/projects\/([^/]+)\/session\/events$/.exec(url.pathname);
+      if (request.method === "POST" && sessionEventRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(sessionEventRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          const body = await readRequestBody(request);
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(
+            response,
+            200,
+            appendSessionEvent(root, project.id, {
+              actor: (stringField(body, "actor") ?? "") as SessionActor,
+              type: (stringField(body, "type") ?? "") as SessionEventType,
+              summary: stringField(body, "summary") ?? "",
+              details: stringField(body, "details"),
+              expected_revision: numberField(body, "expected_revision")
+            })
+          );
+        } catch (error) {
+          sendSessionStoreError(response, error);
+        }
+        return;
+      }
+
+      const sessionHandoffRoute = /^\/chatgpt\/projects\/([^/]+)\/session\/handoffs$/.exec(url.pathname);
+      if (request.method === "POST" && sessionHandoffRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(sessionHandoffRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          const body = await readRequestBody(request);
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(
+            response,
+            200,
+            addSessionHandoff(root, project.id, {
+              from: (stringField(body, "from") ?? "chatgpt") as SessionActor,
+              to: (stringField(body, "to") ?? "") as SessionActor,
+              title: stringField(body, "title") ?? "",
+              message: stringField(body, "message") ?? "",
+              constraints: stringArrayField(body, "constraints"),
+              expected_output: stringArrayField(body, "expected_output"),
+              expected_revision: numberField(body, "expected_revision")
+            })
+          );
+        } catch (error) {
+          sendSessionStoreError(response, error);
+        }
+        return;
+      }
+
+      const sessionHandoffUpdateRoute = /^\/chatgpt\/projects\/([^/]+)\/session\/handoffs\/([^/]+)$/.exec(url.pathname);
+      if (request.method === "POST" && sessionHandoffUpdateRoute) {
+        let projectId: string;
+        let handoffId: string;
+        try {
+          projectId = decodeURIComponent(sessionHandoffUpdateRoute[1]);
+          handoffId = decodeURIComponent(sessionHandoffUpdateRoute[2]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id or handoff id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          const body = await readRequestBody(request);
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(
+            response,
+            200,
+            updateSessionHandoff(root, project.id, handoffId, {
+              actor: (stringField(body, "actor") ?? "codex") as SessionActor,
+              status: (stringField(body, "status") ?? "") as SessionHandoffStatus,
+              result_summary: stringField(body, "result_summary"),
+              expected_revision: numberField(body, "expected_revision")
+            })
+          );
+        } catch (error) {
+          sendSessionStoreError(response, error);
+        }
+        return;
+      }
+
+      const sessionGoalRoute = /^\/chatgpt\/projects\/([^/]+)\/session\/goal$/.exec(url.pathname);
+      if (request.method === "POST" && sessionGoalRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(sessionGoalRoute[1]);
+        } catch {
+          sendJson(response, 400, { ok: false, error: { code: "invalid_project_id", message: "Project id is not valid URL encoding." } });
+          return;
+        }
+        const project = findInspectorProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+        try {
+          const body = await readRequestBody(request);
+          if (project.registered) {
+            touchProject(root, project.id);
+          }
+          sendJson(
+            response,
+            200,
+            setSessionGoal(root, project.id, {
+              actor: (stringField(body, "actor") ?? "chatgpt") as SessionActor,
+              goal: stringField(body, "goal") ?? "",
+              phase: stringField(body, "phase") as SessionPhase | undefined,
+              status: stringField(body, "status") as SessionCurrentStatus | undefined,
+              expected_revision: numberField(body, "expected_revision")
+            })
+          );
+        } catch (error) {
+          sendSessionStoreError(response, error);
+        }
         return;
       }
 

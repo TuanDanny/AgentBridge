@@ -727,6 +727,157 @@ describe("local daemon", () => {
     expect(projects.body.registry.projects).toHaveLength(1);
   });
 
+  it("serves shared session GPT Action endpoints with auth, redaction, and safe project routing", async () => {
+    const serverRoot = makeTempRoot();
+    const projectRoot = makeTempRoot();
+    registerProject(serverRoot, "SessionProject", projectRoot);
+    const running = await startAgentBridgeServer(serverRoot, { port: 0 });
+    runningServers.push(running);
+    const token = readLocalToken(serverRoot);
+    const secret = `sk-${"a".repeat(32)}`;
+
+    const denied = await requestJson({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/SessionProject/session/summary"
+    });
+    expect(denied.status).toBe(401);
+
+    const session = await requestJson<{ ok: boolean; summary: { revision: number; project_id: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/SessionProject/session/summary",
+      token
+    });
+    expect(session.status).toBe(200);
+    expect(session.body.ok).toBe(true);
+    expect(session.body.summary.project_id).toBe("SessionProject");
+    expect(session.body.summary.revision).toBe(1);
+
+    const event = await requestJson<{ ok: boolean; event: { summary: string; details: string; redacted: boolean }; revision: number }>(
+      {
+        host: running.info.host,
+        port: running.info.port,
+        path: "/chatgpt/projects/SessionProject/session/events",
+        method: "POST",
+        token,
+        body: {
+          actor: "chatgpt",
+          type: "decision",
+          summary: `Use shared session with OPENAI_API_KEY=${secret}`,
+          details: `Authorization: Bearer ${"b".repeat(32)}`
+        }
+      }
+    );
+    expect(event.status).toBe(200);
+    expect(event.body.revision).toBe(2);
+    expect(event.body.event.redacted).toBe(true);
+    expect(JSON.stringify(event.body)).not.toContain(secret);
+    expect(JSON.stringify(event.body)).not.toContain("OPENAI_API_KEY=");
+
+    const invalidActor = await requestJson({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/SessionProject/session/events",
+      method: "POST",
+      token,
+      body: { actor: "bad", type: "note", summary: "Invalid actor" }
+    });
+    expect(invalidActor.status).toBe(400);
+
+    const handoff = await requestJson<{ ok: boolean; handoff: { id: string; status: string; message: string }; revision: number }>(
+      {
+        host: running.info.host,
+        port: running.info.port,
+        path: "/chatgpt/projects/SessionProject/session/handoffs",
+        method: "POST",
+        token,
+        body: {
+          from: "chatgpt",
+          to: "codex",
+          title: "Implement beta endpoints",
+          message: `Do not leak token=${secret}`,
+          constraints: ["No release", "No /mcp"],
+          expected_output: ["tests run"]
+        }
+      }
+    );
+    expect(handoff.status).toBe(200);
+    expect(handoff.body.handoff.status).toBe("open");
+    expect(JSON.stringify(handoff.body)).not.toContain(secret);
+    expect(JSON.stringify(handoff.body)).not.toContain("token=");
+
+    const updated = await requestJson<{ ok: boolean; handoff: { status: string; result_summary: string }; revision: number }>(
+      {
+        host: running.info.host,
+        port: running.info.port,
+        path: `/chatgpt/projects/SessionProject/session/handoffs/${handoff.body.handoff.id}`,
+        method: "POST",
+        token,
+        body: { actor: "codex", status: "acknowledged", result_summary: `Acknowledged PASSWORD=${secret}` }
+      }
+    );
+    expect(updated.status).toBe(200);
+    expect(updated.body.handoff.status).toBe("acknowledged");
+    expect(updated.body.handoff.result_summary).toContain("[REDACTED]");
+
+    const goal = await requestJson<{ ok: boolean; summary: { current_goal: string; phase: string; current_status: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/SessionProject/session/goal",
+      method: "POST",
+      token,
+      body: { actor: "chatgpt", goal: "Coordinate v0.6 shared session.", phase: "implementation", status: "in_progress" }
+    });
+    expect(goal.status).toBe(200);
+    expect(goal.body.summary.current_goal).toBe("Coordinate v0.6 shared session.");
+    expect(goal.body.summary.phase).toBe("implementation");
+    expect(goal.body.summary.current_status).toBe("in_progress");
+
+    const updates = await requestJson<{ events: unknown[]; handoffs: unknown[]; to_revision: number }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/SessionProject/session/updates?since_revision=1",
+      token
+    });
+    expect(updates.status).toBe(200);
+    expect(updates.body.to_revision).toBeGreaterThan(1);
+    expect(updates.body.events.length).toBeGreaterThan(0);
+    expect(updates.body.handoffs.length).toBeGreaterThan(0);
+
+    const projectSession = await requestJson<{ ok: boolean; state: { revision: number }; summary: { revision: number; session_id: string } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/SessionProject/session",
+      token
+    });
+    expect(projectSession.status).toBe(200);
+    expect(projectSession.body.state.revision).toBe(projectSession.body.summary.revision);
+
+    const unknown = await requestJson({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/MissingProject/session/summary",
+      token
+    });
+    expect(unknown.status).toBe(404);
+
+    const rawProject = await requestJson({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/D:%5CAgentBridge/session/summary",
+      token
+    });
+    expect(rawProject.status).toBe(404);
+
+    const stored = fs.readFileSync(
+      path.join(serverRoot, ".agentbridge", "sessions", "SessionProject", projectSession.body.summary.session_id, "events.jsonl"),
+      "utf8"
+    );
+    expect(stored).not.toContain(secret);
+    expect(stored).not.toContain("OPENAI_API_KEY=");
+  });
+
   it("serves randomized safe project file browser and active project endpoints", async () => {
     const serverRoot = makeTempRoot();
     const projectRoot = makeTempRoot();
