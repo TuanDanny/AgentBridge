@@ -284,6 +284,110 @@ describe("compiled CLI smoke tests", () => {
     expect(cleared.cleared).toBe(true);
   });
 
+  it("supports shared session CLI commands without leaking secrets", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-session-registry-");
+    const token = `sk-${"a".repeat(32)}`;
+
+    JSON.parse(runCli(registryRoot, "project", "register-current", "AgentBridge"));
+
+    const active = JSON.parse(runCli(registryRoot, "session", "active", "--json"));
+    expect(active.ok).toBe(true);
+    expect(active.summary.revision).toBe(1);
+
+    const summary = JSON.parse(runCli(registryRoot, "session", "summary", "AgentBridge", "--json"));
+    expect(summary.summary.project_id).toBe("AgentBridge");
+
+    const event = JSON.parse(
+      runCli(
+        registryRoot,
+        "session",
+        "event",
+        "AgentBridge",
+        "--actor",
+        "codex",
+        "--type",
+        "note",
+        "--summary",
+        `Started with OPENAI_API_KEY=${token}`,
+        "--details",
+        `Authorization: Bearer ${"b".repeat(32)}`,
+        "--json"
+      )
+    );
+    expect(event.event.summary).toContain("[REDACTED]");
+    expect(JSON.stringify(event)).not.toContain(token);
+
+    const handoff = JSON.parse(
+      runCli(
+        registryRoot,
+        "session",
+        "handoff",
+        "AgentBridge",
+        "--from",
+        "chatgpt",
+        "--to",
+        "codex",
+        "--title",
+        "Implement session CLI",
+        "--message",
+        `Do not leak token=${token}`,
+        "--constraints",
+        "No release,No tag change",
+        "--expected-output",
+        "files changed,tests run",
+        "--json"
+      )
+    );
+    expect(handoff.handoff.status).toBe("open");
+    expect(JSON.stringify(handoff)).not.toContain(token);
+
+    const openHandoffs = JSON.parse(runCli(registryRoot, "session", "handoffs", "AgentBridge", "--open", "--json"));
+    expect(openHandoffs.handoffs).toHaveLength(1);
+
+    const updated = JSON.parse(
+      runCli(
+        registryRoot,
+        "session",
+        "update-handoff",
+        "AgentBridge",
+        handoff.handoff.id,
+        "--status",
+        "acknowledged",
+        "--summary",
+        `Acknowledged PASSWORD=${token}`,
+        "--json"
+      )
+    );
+    expect(updated.handoff.status).toBe("acknowledged");
+    expect(updated.handoff.result_summary).toContain("[REDACTED]");
+
+    const goal = JSON.parse(
+      runCli(
+        registryRoot,
+        "session",
+        "set-goal",
+        "AgentBridge",
+        "Build shared workspace memory.",
+        "--phase",
+        "implementation",
+        "--status",
+        "in_progress",
+        "--json"
+      )
+    );
+    expect(goal.summary.current_goal).toBe("Build shared workspace memory.");
+    expect(goal.summary.phase).toBe("implementation");
+
+    const updates = JSON.parse(runCli(registryRoot, "session", "updates", "AgentBridge", "--since", "1", "--json"));
+    expect(updates.events.length).toBeGreaterThan(0);
+
+    const sessionDir = path.join(registryRoot, ".agentbridge", "sessions", "AgentBridge");
+    expect(fs.existsSync(path.join(sessionDir, "active_session.json"))).toBe(true);
+    const stored = fs.readFileSync(path.join(sessionDir, active.session.session_id, "events.jsonl"), "utf8");
+    expect(stored).not.toContain(token);
+    expect(stored).not.toContain("Authorization: Bearer b");
+  });
+
   it("keeps active project event logs local-only", () => {
     const ignored = run(process.cwd(), "git", ["check-ignore", "-v", ".agentbridge/active_project_events.jsonl"]);
     expect(ignored).toContain(".agentbridge/");

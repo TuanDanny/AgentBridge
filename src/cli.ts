@@ -66,6 +66,20 @@ import {
   formatCodexChangesHuman,
   formatInspectorHuman
 } from "./inspector.js";
+import {
+  addSessionHandoff,
+  appendSessionEvent,
+  formatSessionHandoffs,
+  formatSessionSummary,
+  formatSessionUpdates,
+  getOrCreateActiveSession,
+  getSessionSummary,
+  getSessionUpdates,
+  listSessionHandoffs,
+  setSessionGoal,
+  updateSessionHandoff
+} from "./sessionStore.js";
+import type { SessionActor, SessionCurrentStatus, SessionEventType, SessionHandoffStatus, SessionPhase } from "./sessionTypes.js";
 
 function printResult(result: { message: string; bridgeDir: string; changedFiles: string[] }): void {
   console.log(result.message);
@@ -194,6 +208,16 @@ function parseProjectNameStyle(value: string): ProjectNameStyle {
   return value;
 }
 
+function parseCommaList(value?: string): string[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function resolveCliProject(id: string): { root: string; projectId: string; projectName?: string; registered: boolean } {
   const registeredProjects = listProjects(process.cwd());
   const registered = registeredProjects.length ? findProject(process.cwd(), id) : undefined;
@@ -209,6 +233,28 @@ function resolveCliProject(id: string): { root: string; projectId: string; proje
     ...(registered?.name ? { projectName: registered.name } : {}),
     registered: Boolean(registered)
   };
+}
+
+function resolveCliSessionProject(id?: string): string {
+  if (id) {
+    return resolveCliProject(id).projectId;
+  }
+
+  const active = readActiveProject(process.cwd()).active_project;
+  if (active?.id) {
+    return active.id;
+  }
+
+  const registeredProjects = listProjects(process.cwd());
+  if (registeredProjects.length === 1) {
+    return registeredProjects[0].id;
+  }
+
+  if (!registeredProjects.length) {
+    return projectIdFromRoot(process.cwd());
+  }
+
+  throw new Error("No active project selected. Run agentbridge project select <id> or pass a project id.");
 }
 
 program
@@ -465,6 +511,211 @@ approvals
       handleError(error);
     }
   });
+
+const session = program.command("session").description("Manage shared CodexLink workspace sessions.");
+
+session
+  .command("active")
+  .description("Get or create the active shared session.")
+  .option("--json", "print JSON session view")
+  .action((options: { json?: boolean }) => {
+    try {
+      const projectId = resolveCliSessionProject();
+      const view = getOrCreateActiveSession(process.cwd(), projectId);
+      console.log(options.json ? JSON.stringify(view, null, 2) : formatSessionSummary(view.summary));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+session
+  .command("summary")
+  .description("Get a compact shared session summary.")
+  .argument("<projectId>", "safe project id")
+  .option("--json", "print JSON summary")
+  .action((projectId: string, options: { json?: boolean }) => {
+    try {
+      const resolvedProjectId = resolveCliSessionProject(projectId);
+      const summary = getSessionSummary(process.cwd(), resolvedProjectId);
+      console.log(options.json ? JSON.stringify({ ok: true, summary }, null, 2) : formatSessionSummary(summary));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+session
+  .command("updates")
+  .description("Get shared session updates after a revision.")
+  .argument("<projectId>", "safe project id")
+  .requiredOption("--since <revision>", "non-negative session revision")
+  .option("--json", "print JSON updates")
+  .action((projectId: string, options: { since: string; json?: boolean }) => {
+    try {
+      const resolvedProjectId = resolveCliSessionProject(projectId);
+      const since = parseNonNegativeIntegerOption(options.since, "--since");
+      const updates = getSessionUpdates(process.cwd(), resolvedProjectId, since);
+      console.log(options.json ? JSON.stringify(updates, null, 2) : formatSessionUpdates(updates));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+session
+  .command("event")
+  .description("Append a shared session event.")
+  .argument("<projectId>", "safe project id")
+  .requiredOption("--actor <actor>", "user, chatgpt, codex, or system")
+  .requiredOption("--type <type>", "session event type")
+  .requiredOption("--summary <summary>", "short event summary")
+  .option("--details <details>", "optional event details")
+  .option("--expected-revision <revision>", "optional optimistic concurrency revision")
+  .option("--json", "print JSON result")
+  .action(
+    (
+      projectId: string,
+      options: { actor: string; type: string; summary: string; details?: string; expectedRevision?: string; json?: boolean }
+    ) => {
+      try {
+        const resolvedProjectId = resolveCliSessionProject(projectId);
+        const result = appendSessionEvent(process.cwd(), resolvedProjectId, {
+          actor: options.actor as SessionActor,
+          type: options.type as SessionEventType,
+          summary: options.summary,
+          details: options.details,
+          ...(options.expectedRevision ? { expected_revision: parseNonNegativeIntegerOption(options.expectedRevision, "--expected-revision") } : {})
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionSummary(result.summary));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
+
+session
+  .command("handoff")
+  .description("Add a shared session handoff.")
+  .argument("<projectId>", "safe project id")
+  .requiredOption("--to <actor>", "handoff target actor")
+  .requiredOption("--title <title>", "handoff title")
+  .requiredOption("--message <message>", "handoff message")
+  .option("--from <actor>", "handoff source actor", "chatgpt")
+  .option("--constraints <items>", "comma-separated constraints")
+  .option("--expected-output <items>", "comma-separated expected output items")
+  .option("--expected-revision <revision>", "optional optimistic concurrency revision")
+  .option("--json", "print JSON result")
+  .action(
+    (
+      projectId: string,
+      options: {
+        to: string;
+        title: string;
+        message: string;
+        from: string;
+        constraints?: string;
+        expectedOutput?: string;
+        expectedRevision?: string;
+        json?: boolean;
+      }
+    ) => {
+      try {
+        const resolvedProjectId = resolveCliSessionProject(projectId);
+        const result = addSessionHandoff(process.cwd(), resolvedProjectId, {
+          from: options.from as SessionActor,
+          to: options.to as SessionActor,
+          title: options.title,
+          message: options.message,
+          constraints: parseCommaList(options.constraints),
+          expected_output: parseCommaList(options.expectedOutput),
+          ...(options.expectedRevision ? { expected_revision: parseNonNegativeIntegerOption(options.expectedRevision, "--expected-revision") } : {})
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionHandoffs([result.handoff]));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
+
+session
+  .command("handoffs")
+  .description("List shared session handoffs.")
+  .argument("<projectId>", "safe project id")
+  .option("--open", "only show open/active handoffs")
+  .option("--json", "print JSON result")
+  .action((projectId: string, options: { open?: boolean; json?: boolean }) => {
+    try {
+      const resolvedProjectId = resolveCliSessionProject(projectId);
+      const result = listSessionHandoffs(process.cwd(), resolvedProjectId);
+      const handoffs = options.open
+        ? result.handoffs.filter((handoff) => ["open", "acknowledged", "in_progress", "blocked"].includes(handoff.status))
+        : result.handoffs;
+      console.log(options.json ? JSON.stringify({ ...result, handoffs }, null, 2) : formatSessionHandoffs(handoffs));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+session
+  .command("update-handoff")
+  .description("Update a shared session handoff status.")
+  .argument("<projectId>", "safe project id")
+  .argument("<handoffId>", "handoff id")
+  .requiredOption("--status <status>", "new handoff status")
+  .option("--actor <actor>", "actor updating the handoff", "codex")
+  .option("--summary <summary>", "optional result summary")
+  .option("--expected-revision <revision>", "optional optimistic concurrency revision")
+  .option("--json", "print JSON result")
+  .action(
+    (
+      projectId: string,
+      handoffId: string,
+      options: { status: string; actor: string; summary?: string; expectedRevision?: string; json?: boolean }
+    ) => {
+      try {
+        const resolvedProjectId = resolveCliSessionProject(projectId);
+        const result = updateSessionHandoff(process.cwd(), resolvedProjectId, handoffId, {
+          status: options.status as SessionHandoffStatus,
+          actor: options.actor as SessionActor,
+          result_summary: options.summary,
+          ...(options.expectedRevision ? { expected_revision: parseNonNegativeIntegerOption(options.expectedRevision, "--expected-revision") } : {})
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionHandoffs([result.handoff]));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
+
+session
+  .command("set-goal")
+  .description("Set the current shared session goal.")
+  .argument("<projectId>", "safe project id")
+  .argument("<goal>", "session goal")
+  .option("--actor <actor>", "actor setting the goal", "codex")
+  .option("--phase <phase>", "planning, implementation, review, blocked, or done")
+  .option("--status <status>", "active, in_progress, blocked, or done")
+  .option("--expected-revision <revision>", "optional optimistic concurrency revision")
+  .option("--json", "print JSON result")
+  .action(
+    (
+      projectId: string,
+      goal: string,
+      options: { actor: string; phase?: string; status?: string; expectedRevision?: string; json?: boolean }
+    ) => {
+      try {
+        const resolvedProjectId = resolveCliSessionProject(projectId);
+        const result = setSessionGoal(process.cwd(), resolvedProjectId, {
+          actor: options.actor as SessionActor,
+          goal,
+          ...(options.phase ? { phase: options.phase as SessionPhase } : {}),
+          ...(options.status ? { status: options.status as SessionCurrentStatus } : {}),
+          ...(options.expectedRevision ? { expected_revision: parseNonNegativeIntegerOption(options.expectedRevision, "--expected-revision") } : {})
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionSummary(result.summary));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
 
 const project = program.command("project").description("Manage the local AgentBridge project registry.");
 

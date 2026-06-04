@@ -1,0 +1,711 @@
+import fs from "node:fs";
+import path from "node:path";
+import { ensureDir, pathExists, readJsonIfExists } from "./fsx.js";
+import { bridgePath } from "./paths.js";
+import { validateProjectId } from "./registry.js";
+import { sanitizeSessionText, sanitizeSessionTextArray } from "./sessionRedaction.js";
+import {
+  SESSION_SCHEMA_VERSION,
+  type ActiveSessionFile,
+  type AddSessionHandoffInput,
+  type AppendSessionEventInput,
+  type SessionActor,
+  type SessionCurrentStatus,
+  type SessionEventType,
+  type SessionHandoffStatus,
+  type SessionPhase,
+  type SessionUpdatesResult,
+  type SetSessionGoalInput,
+  type SharedSessionEvent,
+  type SharedSessionFile,
+  type SharedSessionHandoff,
+  type SharedSessionStateFile,
+  type SharedSessionSummaryFile,
+  type SharedSessionView,
+  type UpdateSessionHandoffInput
+} from "./sessionTypes.js";
+
+const SUMMARY_MAX = 500;
+const DETAILS_MAX = 2000;
+const TITLE_MAX = 200;
+const MESSAGE_MAX = 3000;
+const ARRAY_ITEM_MAX = 500;
+const ARRAY_MAX = 20;
+const WARNING_MAX = 25;
+const RECENT_EVENT_MAX = 10;
+const OPEN_HANDOFF_MAX = 10;
+
+const ACTORS = new Set<SessionActor>(["user", "chatgpt", "codex", "system"]);
+const EVENT_TYPES = new Set<SessionEventType>([
+  "note",
+  "decision",
+  "correction",
+  "handoff",
+  "implementation",
+  "review",
+  "test_result",
+  "commit",
+  "warning",
+  "blocker"
+]);
+const HANDOFF_STATUSES = new Set<SessionHandoffStatus>([
+  "open",
+  "acknowledged",
+  "in_progress",
+  "done",
+  "blocked",
+  "cancelled",
+  "superseded"
+]);
+const PHASES = new Set<SessionPhase>(["planning", "implementation", "review", "blocked", "done"]);
+const CURRENT_STATUSES = new Set<SessionCurrentStatus>(["active", "in_progress", "blocked", "done"]);
+const OPEN_HANDOFF_STATUSES = new Set<SessionHandoffStatus>(["open", "acknowledged", "in_progress", "blocked"]);
+
+export class SessionStoreError extends Error {
+  code: string;
+  status: number;
+
+  constructor(code: string, message: string, status = 400) {
+    super(message);
+    this.name = "SessionStoreError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function getOrCreateActiveSession(registryRoot: string, projectIdInput: string): SharedSessionView {
+  const projectId = validateProjectId(projectIdInput);
+  const active = readOrCreateActiveSession(registryRoot, projectId);
+  const paths = sessionPaths(registryRoot, projectId, active.session_id);
+  const session = readJsonIfExists<SharedSessionFile>(paths.session) ?? defaultSession(projectId, active.session_id, active.updated_at);
+  const state = readJsonIfExists<SharedSessionStateFile>(paths.state) ?? defaultState(projectId, active.session_id, active.updated_at);
+
+  ensureSessionFiles(paths, active, session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return { ok: true, active_session: active, session, state: readState(paths), summary };
+}
+
+export function getProjectSession(registryRoot: string, projectIdInput: string): SharedSessionView {
+  return getOrCreateActiveSession(registryRoot, projectIdInput);
+}
+
+export function getSessionSummary(registryRoot: string, projectIdInput: string): SharedSessionSummaryFile {
+  const { summary } = getOrCreateActiveSession(registryRoot, projectIdInput);
+  return summary;
+}
+
+export function appendSessionEvent(
+  registryRoot: string,
+  projectIdInput: string,
+  input: AppendSessionEventInput
+): { ok: true; event: SharedSessionEvent; summary: SharedSessionSummaryFile; revision: number } {
+  const projectId = validateProjectId(projectIdInput);
+  const actor = validateActor(input.actor);
+  const type = validateEventType(input.type);
+  const summaryText = sanitizeSessionText(input.summary, SUMMARY_MAX);
+  const detailsText = sanitizeSessionText(input.details ?? "", DETAILS_MAX);
+  if (!summaryText.text.trim()) {
+    throw new SessionStoreError("invalid_session_event", "Session event summary is required.");
+  }
+
+  const bundle = readSessionBundle(registryRoot, projectId);
+  assertExpectedRevision(bundle.state.revision, input.expected_revision);
+  const events = readJsonLines<SharedSessionEvent>(bundle.paths.events);
+  const revision = bundle.state.revision + 1;
+  const event: SharedSessionEvent = {
+    id: eventId(events.length + 1),
+    seq: events.length + 1,
+    revision,
+    time: new Date().toISOString(),
+    actor,
+    type,
+    summary: summaryText.text.trim(),
+    details: detailsText.text.trim(),
+    redacted: summaryText.redacted || detailsText.redacted,
+    truncated: summaryText.truncated || detailsText.truncated
+  };
+
+  appendJsonLine(bundle.paths.events, event);
+  const state = updateStateForWrite(bundle.state, {
+    revision,
+    actor,
+    lastEventId: event.id,
+    warning: event.truncated ? "Some session event input was truncated before storage." : undefined
+  });
+  writeStateSnapshots(bundle.paths, bundle.active, bundle.session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return { ok: true, event, summary, revision };
+}
+
+export function addSessionHandoff(
+  registryRoot: string,
+  projectIdInput: string,
+  input: AddSessionHandoffInput
+): { ok: true; handoff: SharedSessionHandoff; event: SharedSessionEvent; summary: SharedSessionSummaryFile; revision: number } {
+  const projectId = validateProjectId(projectIdInput);
+  const from = validateActor(input.from ?? "chatgpt");
+  const to = validateActor(input.to);
+  const title = sanitizeSessionText(input.title, TITLE_MAX);
+  const message = sanitizeSessionText(input.message, MESSAGE_MAX);
+  const constraints = sanitizeSessionTextArray(input.constraints, ARRAY_MAX, ARRAY_ITEM_MAX);
+  const expectedOutput = sanitizeSessionTextArray(input.expected_output, ARRAY_MAX, ARRAY_ITEM_MAX);
+  if (!title.text.trim()) {
+    throw new SessionStoreError("invalid_session_handoff", "Session handoff title is required.");
+  }
+  if (!message.text.trim()) {
+    throw new SessionStoreError("invalid_session_handoff", "Session handoff message is required.");
+  }
+
+  const bundle = readSessionBundle(registryRoot, projectId);
+  assertExpectedRevision(bundle.state.revision, input.expected_revision);
+  const handoffVersions = readJsonLines<SharedSessionHandoff>(bundle.paths.handoffs);
+  const revision = bundle.state.revision + 1;
+  const handoff: SharedSessionHandoff = {
+    id: handoffId(countUniqueHandoffs(handoffVersions) + 1),
+    seq: handoffVersions.length + 1,
+    revision,
+    time: new Date().toISOString(),
+    from,
+    to,
+    status: "open",
+    title: title.text.trim(),
+    message: message.text.trim(),
+    constraints: constraints.values,
+    expected_output: expectedOutput.values,
+    result_summary: null,
+    redacted: title.redacted || message.redacted || constraints.redacted || expectedOutput.redacted,
+    truncated: title.truncated || message.truncated || constraints.truncated || expectedOutput.truncated
+  };
+
+  appendJsonLine(bundle.paths.handoffs, handoff);
+  const event = createSystemEvent(bundle.paths.events, revision, from, "handoff", `Handoff added: ${handoff.title}`, handoff.message);
+  appendJsonLine(bundle.paths.events, event);
+  const state = updateStateForWrite(bundle.state, {
+    revision,
+    actor: from,
+    lastEventId: event.id,
+    warning: handoff.truncated ? "Some session handoff input was truncated before storage." : undefined
+  });
+  writeStateSnapshots(bundle.paths, bundle.active, bundle.session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return { ok: true, handoff, event, summary, revision };
+}
+
+export function updateSessionHandoff(
+  registryRoot: string,
+  projectIdInput: string,
+  handoffIdInput: string,
+  input: UpdateSessionHandoffInput
+): { ok: true; handoff: SharedSessionHandoff; event: SharedSessionEvent; summary: SharedSessionSummaryFile; revision: number } {
+  const projectId = validateProjectId(projectIdInput);
+  const status = validateHandoffStatus(input.status);
+  const actor = validateActor(input.actor ?? "codex");
+  const resultSummary = sanitizeSessionText(input.result_summary ?? "", DETAILS_MAX);
+  const bundle = readSessionBundle(registryRoot, projectId);
+  assertExpectedRevision(bundle.state.revision, input.expected_revision);
+  const handoffs = readJsonLines<SharedSessionHandoff>(bundle.paths.handoffs);
+  const current = currentHandoffs(handoffs).find((handoff) => handoff.id === handoffIdInput);
+  if (!current) {
+    throw new SessionStoreError("handoff_not_found", "Session handoff was not found.", 404);
+  }
+
+  const revision = bundle.state.revision + 1;
+  const updated: SharedSessionHandoff = {
+    ...current,
+    seq: handoffs.length + 1,
+    revision,
+    time: new Date().toISOString(),
+    status,
+    result_summary: resultSummary.text.trim() || current.result_summary,
+    redacted: current.redacted || resultSummary.redacted,
+    truncated: current.truncated || resultSummary.truncated
+  };
+
+  appendJsonLine(bundle.paths.handoffs, updated);
+  const event = createSystemEvent(
+    bundle.paths.events,
+    revision,
+    actor,
+    "handoff",
+    `Handoff ${handoffIdInput} marked ${status}.`,
+    resultSummary.text
+  );
+  appendJsonLine(bundle.paths.events, event);
+  const state = updateStateForWrite(bundle.state, {
+    revision,
+    actor,
+    lastEventId: event.id,
+    warning: updated.truncated ? "Some session handoff update input was truncated before storage." : undefined
+  });
+  writeStateSnapshots(bundle.paths, bundle.active, bundle.session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return { ok: true, handoff: updated, event, summary, revision };
+}
+
+export function setSessionGoal(
+  registryRoot: string,
+  projectIdInput: string,
+  input: SetSessionGoalInput
+): { ok: true; summary: SharedSessionSummaryFile; revision: number; event: SharedSessionEvent } {
+  const projectId = validateProjectId(projectIdInput);
+  const actor = validateActor(input.actor ?? "codex");
+  const phase = input.phase ? validatePhase(input.phase) : "planning";
+  const status = input.status ? validateCurrentStatus(input.status) : "active";
+  const goal = sanitizeSessionText(input.goal, SUMMARY_MAX);
+  if (!goal.text.trim()) {
+    throw new SessionStoreError("invalid_session_goal", "Session goal is required.");
+  }
+
+  const bundle = readSessionBundle(registryRoot, projectId);
+  assertExpectedRevision(bundle.state.revision, input.expected_revision);
+  const revision = bundle.state.revision + 1;
+  const event = createSystemEvent(bundle.paths.events, revision, actor, "decision", "Session goal updated.", goal.text);
+  appendJsonLine(bundle.paths.events, event);
+  const state = updateStateForWrite(
+    {
+      ...bundle.state,
+      current: {
+        goal: goal.text.trim(),
+        phase,
+        status
+      }
+    },
+    {
+      revision,
+      actor,
+      lastEventId: event.id,
+      warning: goal.truncated ? "Session goal input was truncated before storage." : undefined
+    }
+  );
+  const session: SharedSessionFile = {
+    ...bundle.session,
+    active_goal: goal.text.trim(),
+    phase,
+    updated_at: state.updated_at
+  };
+  writeStateSnapshots(bundle.paths, bundle.active, session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return { ok: true, summary, revision, event };
+}
+
+export function getSessionUpdates(registryRoot: string, projectIdInput: string, sinceRevisionInput: number): SessionUpdatesResult {
+  const projectId = validateProjectId(projectIdInput);
+  if (!Number.isInteger(sinceRevisionInput) || sinceRevisionInput < 0) {
+    throw new SessionStoreError("invalid_query", "since_revision must be a non-negative integer.");
+  }
+  const bundle = readSessionBundle(registryRoot, projectId);
+  const events = readJsonLines<SharedSessionEvent>(bundle.paths.events).filter((event) => event.revision > sinceRevisionInput);
+  const handoffs = currentHandoffs(readJsonLines<SharedSessionHandoff>(bundle.paths.handoffs)).filter(
+    (handoff) => handoff.revision > sinceRevisionInput
+  );
+  return {
+    ok: true,
+    project_id: projectId,
+    session_id: bundle.session.session_id,
+    from_revision: sinceRevisionInput,
+    to_revision: bundle.state.revision,
+    events,
+    handoffs,
+    summary_changed: bundle.state.revision > sinceRevisionInput
+  };
+}
+
+export function rebuildSessionSummary(registryRoot: string, projectIdInput: string): SharedSessionSummaryFile {
+  const projectId = validateProjectId(projectIdInput);
+  const bundle = readSessionBundle(registryRoot, projectId, { createIfMissing: true });
+  const events = readJsonLines<SharedSessionEvent>(bundle.paths.events);
+  const handoffs = currentHandoffs(readJsonLines<SharedSessionHandoff>(bundle.paths.handoffs));
+  const openHandoffs = handoffs.filter((handoff) => OPEN_HANDOFF_STATUSES.has(handoff.status)).slice(-OPEN_HANDOFF_MAX);
+  const summary: SharedSessionSummaryFile = {
+    schema_version: SESSION_SCHEMA_VERSION,
+    project_id: projectId,
+    session_id: bundle.session.session_id,
+    revision: bundle.state.revision,
+    one_line: bundle.state.current.goal || "Shared session is active.",
+    current_goal: bundle.state.current.goal,
+    current_status: bundle.state.current.status,
+    phase: bundle.state.current.phase,
+    recent_events: events.slice(-RECENT_EVENT_MAX),
+    open_handoffs: openHandoffs,
+    next_steps: bundle.state.next_steps,
+    do_not_do: bundle.state.do_not_do,
+    warnings: bundle.state.warnings,
+    updated_at: bundle.state.updated_at
+  };
+  atomicWriteJson(bundle.paths.summary, summary);
+  return summary;
+}
+
+export function formatSessionSummary(summary: SharedSessionSummaryFile): string {
+  const lines = [
+    `Session: ${summary.session_id}`,
+    `Project: ${summary.project_id}`,
+    `Revision: ${summary.revision}`,
+    `Goal: ${summary.current_goal}`,
+    `Phase: ${summary.phase}`,
+    `Status: ${summary.current_status}`,
+    "",
+    "Open handoffs:",
+    ...(summary.open_handoffs.length
+      ? summary.open_handoffs.map((handoff) => `- ${handoff.id} [${handoff.status}] ${handoff.title}`)
+      : ["- None"]),
+    "",
+    "Recent events:",
+    ...(summary.recent_events.length
+      ? summary.recent_events.map((event) => `- r${event.revision} ${event.actor}/${event.type}: ${event.summary}`)
+      : ["- None"])
+  ];
+  return lines.join("\n");
+}
+
+export function formatSessionUpdates(updates: SessionUpdatesResult): string {
+  return [
+    `Session updates: ${updates.project_id}`,
+    `Revision: ${updates.from_revision} -> ${updates.to_revision}`,
+    "",
+    "Events:",
+    ...(updates.events.length
+      ? updates.events.map((event) => `- r${event.revision} ${event.actor}/${event.type}: ${event.summary}`)
+      : ["- None"]),
+    "",
+    "Handoffs:",
+    ...(updates.handoffs.length
+      ? updates.handoffs.map((handoff) => `- r${handoff.revision} ${handoff.id} [${handoff.status}] ${handoff.title}`)
+      : ["- None"])
+  ].join("\n");
+}
+
+export function formatSessionHandoffs(handoffs: SharedSessionHandoff[]): string {
+  return [
+    "Session handoffs:",
+    "",
+    ...(handoffs.length
+      ? handoffs.map((handoff) => `${handoff.id} [${handoff.status}] ${handoff.from} -> ${handoff.to}: ${handoff.title}`)
+      : ["None"])
+  ].join("\n");
+}
+
+export function listSessionHandoffs(
+  registryRoot: string,
+  projectIdInput: string,
+  status?: SessionHandoffStatus
+): { ok: true; project_id: string; handoffs: SharedSessionHandoff[] } {
+  const projectId = validateProjectId(projectIdInput);
+  const bundle = readSessionBundle(registryRoot, projectId);
+  const handoffs = currentHandoffs(readJsonLines<SharedSessionHandoff>(bundle.paths.handoffs)).filter((handoff) =>
+    status ? handoff.status === validateHandoffStatus(status) : true
+  );
+  return { ok: true, project_id: projectId, handoffs };
+}
+
+interface SessionPathSet {
+  projectDir: string;
+  sessionDir: string;
+  active: string;
+  session: string;
+  state: string;
+  summary: string;
+  events: string;
+  handoffs: string;
+}
+
+interface SessionBundle {
+  paths: SessionPathSet;
+  active: ActiveSessionFile;
+  session: SharedSessionFile;
+  state: SharedSessionStateFile;
+}
+
+function readSessionBundle(registryRoot: string, projectId: string, options: { createIfMissing?: boolean } = {}): SessionBundle {
+  const active = options.createIfMissing === false ? readActiveSession(registryRoot, projectId) : readOrCreateActiveSession(registryRoot, projectId);
+  const paths = sessionPaths(registryRoot, projectId, active.session_id);
+  const session = readJsonIfExists<SharedSessionFile>(paths.session);
+  const state = readJsonIfExists<SharedSessionStateFile>(paths.state);
+  if (!session || !state) {
+    if (options.createIfMissing === false) {
+      throw new SessionStoreError("session_not_found", "Shared session was not found.", 404);
+    }
+    const now = new Date().toISOString();
+    const createdSession = session ?? defaultSession(projectId, active.session_id, now);
+    const createdState = state ?? defaultState(projectId, active.session_id, now);
+    ensureSessionFiles(paths, active, createdSession, createdState);
+    return { paths, active, session: createdSession, state: createdState };
+  }
+  return { paths, active, session, state };
+}
+
+function readActiveSession(registryRoot: string, projectId: string): ActiveSessionFile {
+  const active = readJsonIfExists<ActiveSessionFile>(activeSessionPath(registryRoot, projectId));
+  if (!active) {
+    throw new SessionStoreError("session_not_found", "Active shared session was not found.", 404);
+  }
+  return active;
+}
+
+function readOrCreateActiveSession(registryRoot: string, projectId: string): ActiveSessionFile {
+  const existing = readJsonIfExists<ActiveSessionFile>(activeSessionPath(registryRoot, projectId));
+  if (existing) {
+    return existing;
+  }
+  const now = new Date().toISOString();
+  const active: ActiveSessionFile = {
+    schema_version: SESSION_SCHEMA_VERSION,
+    project_id: projectId,
+    session_id: defaultSessionId(projectId),
+    revision: 1,
+    updated_at: now
+  };
+  const paths = sessionPaths(registryRoot, projectId, active.session_id);
+  ensureSessionFiles(paths, active, defaultSession(projectId, active.session_id, now), defaultState(projectId, active.session_id, now));
+  rebuildSessionSummary(registryRoot, projectId);
+  return active;
+}
+
+function ensureSessionFiles(
+  paths: SessionPathSet,
+  active: ActiveSessionFile,
+  session: SharedSessionFile,
+  state: SharedSessionStateFile
+): void {
+  ensureDir(paths.sessionDir);
+  atomicWriteJson(paths.active, { ...active, revision: state.revision, updated_at: state.updated_at });
+  atomicWriteJson(paths.session, session);
+  atomicWriteJson(paths.state, state);
+  if (!pathExists(paths.events)) {
+    fs.writeFileSync(paths.events, "", "utf8");
+  }
+  if (!pathExists(paths.handoffs)) {
+    fs.writeFileSync(paths.handoffs, "", "utf8");
+  }
+}
+
+function writeStateSnapshots(
+  paths: SessionPathSet,
+  active: ActiveSessionFile,
+  session: SharedSessionFile,
+  state: SharedSessionStateFile
+): void {
+  const updatedActive: ActiveSessionFile = {
+    ...active,
+    revision: state.revision,
+    updated_at: state.updated_at
+  };
+  const updatedSession: SharedSessionFile = {
+    ...session,
+    updated_at: state.updated_at,
+    phase: state.current.phase,
+    active_goal: state.current.goal
+  };
+  atomicWriteJson(paths.active, updatedActive);
+  atomicWriteJson(paths.session, updatedSession);
+  atomicWriteJson(paths.state, state);
+}
+
+function updateStateForWrite(
+  state: SharedSessionStateFile,
+  args: { revision: number; actor: SessionActor; lastEventId: string; warning?: string }
+): SharedSessionStateFile {
+  const warnings = [...state.warnings];
+  if (args.warning && !warnings.includes(args.warning)) {
+    warnings.push(args.warning);
+  }
+  return {
+    ...state,
+    revision: args.revision,
+    last_event_id: args.lastEventId,
+    last_actor: args.actor,
+    warnings: warnings.slice(-WARNING_MAX),
+    updated_at: new Date().toISOString()
+  };
+}
+
+function defaultSession(projectId: string, sessionId: string, now: string): SharedSessionFile {
+  return {
+    schema_version: SESSION_SCHEMA_VERSION,
+    session_id: sessionId,
+    project_id: projectId,
+    created_at: now,
+    updated_at: now,
+    status: "active",
+    phase: "planning",
+    active_goal: "Shared workspace session is ready.",
+    safety: {
+      store_raw_file_content: false,
+      store_secrets: false,
+      allow_auto_push: false,
+      allow_auto_release: false,
+      allow_arbitrary_shell: false
+    }
+  };
+}
+
+function defaultState(projectId: string, sessionId: string, now: string): SharedSessionStateFile {
+  return {
+    schema_version: SESSION_SCHEMA_VERSION,
+    project_id: projectId,
+    session_id: sessionId,
+    revision: 1,
+    last_event_id: null,
+    last_actor: "system",
+    current: {
+      goal: "Shared workspace session is ready.",
+      phase: "planning",
+      status: "active"
+    },
+    next_steps: [],
+    do_not_do: [
+      "Do not store raw file content or secrets in session.",
+      "Do not add arbitrary command runner.",
+      "Do not create releases or modify tags from session state."
+    ],
+    warnings: [],
+    updated_at: now
+  };
+}
+
+function readState(paths: SessionPathSet): SharedSessionStateFile {
+  const state = readJsonIfExists<SharedSessionStateFile>(paths.state);
+  if (!state) {
+    throw new SessionStoreError("session_not_found", "Shared session state was not found.", 404);
+  }
+  return state;
+}
+
+function createSystemEvent(
+  eventsPath: string,
+  revision: number,
+  actor: SessionActor,
+  type: SessionEventType,
+  summaryInput: string,
+  detailsInput = ""
+): SharedSessionEvent {
+  const events = readJsonLines<SharedSessionEvent>(eventsPath);
+  const summary = sanitizeSessionText(summaryInput, SUMMARY_MAX);
+  const details = sanitizeSessionText(detailsInput, DETAILS_MAX);
+  return {
+    id: eventId(events.length + 1),
+    seq: events.length + 1,
+    revision,
+    time: new Date().toISOString(),
+    actor,
+    type,
+    summary: summary.text.trim(),
+    details: details.text.trim(),
+    redacted: summary.redacted || details.redacted,
+    truncated: summary.truncated || details.truncated
+  };
+}
+
+function currentHandoffs(handoffVersions: SharedSessionHandoff[]): SharedSessionHandoff[] {
+  const byId = new Map<string, SharedSessionHandoff>();
+  for (const handoff of handoffVersions) {
+    byId.set(handoff.id, handoff);
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function countUniqueHandoffs(handoffVersions: SharedSessionHandoff[]): number {
+  return new Set(handoffVersions.map((handoff) => handoff.id)).size;
+}
+
+function readJsonLines<T>(filePath: string): T[] {
+  if (!pathExists(filePath)) {
+    return [];
+  }
+  const content = fs.readFileSync(filePath, "utf8").trim();
+  if (!content) {
+    return [];
+  }
+  return content
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as T);
+}
+
+function appendJsonLine(filePath: string, value: unknown): void {
+  ensureDir(path.dirname(filePath));
+  fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
+}
+
+function atomicWriteJson(filePath: string, value: unknown): void {
+  ensureDir(path.dirname(filePath));
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  fs.renameSync(tempPath, filePath);
+}
+
+function sessionPaths(registryRoot: string, projectId: string, sessionId: string): SessionPathSet {
+  const projectDir = path.join(bridgePath(registryRoot, "sessions"), projectId);
+  const sessionDir = path.join(projectDir, sessionId);
+  return {
+    projectDir,
+    sessionDir,
+    active: path.join(projectDir, "active_session.json"),
+    session: path.join(sessionDir, "session.json"),
+    state: path.join(sessionDir, "state.json"),
+    summary: path.join(sessionDir, "summary.json"),
+    events: path.join(sessionDir, "events.jsonl"),
+    handoffs: path.join(sessionDir, "handoffs.jsonl")
+  };
+}
+
+function activeSessionPath(registryRoot: string, projectId: string): string {
+  return path.join(bridgePath(registryRoot, "sessions"), projectId, "active_session.json");
+}
+
+function defaultSessionId(projectId: string): string {
+  return `sess_${projectId.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 48) || "project"}_shared`;
+}
+
+function eventId(seq: number): string {
+  return `evt_${seq.toString().padStart(6, "0")}`;
+}
+
+function handoffId(seq: number): string {
+  return `handoff_${seq.toString().padStart(6, "0")}`;
+}
+
+function assertExpectedRevision(currentRevision: number, expectedRevision?: number): void {
+  if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
+    throw new SessionStoreError(
+      "revision_conflict",
+      `Session revision conflict. Current revision is ${currentRevision}. Read latest summary and retry.`,
+      409
+    );
+  }
+}
+
+function validateActor(value: string): SessionActor {
+  if (!ACTORS.has(value as SessionActor)) {
+    throw new SessionStoreError("invalid_actor", "Session actor must be user, chatgpt, codex, or system.");
+  }
+  return value as SessionActor;
+}
+
+function validateEventType(value: string): SessionEventType {
+  if (!EVENT_TYPES.has(value as SessionEventType)) {
+    throw new SessionStoreError("invalid_event_type", "Session event type is not allowed.");
+  }
+  return value as SessionEventType;
+}
+
+function validateHandoffStatus(value: string): SessionHandoffStatus {
+  if (!HANDOFF_STATUSES.has(value as SessionHandoffStatus)) {
+    throw new SessionStoreError("invalid_status", "Session handoff status is not allowed.");
+  }
+  return value as SessionHandoffStatus;
+}
+
+function validatePhase(value: string): SessionPhase {
+  if (!PHASES.has(value as SessionPhase)) {
+    throw new SessionStoreError("invalid_phase", "Session phase is not allowed.");
+  }
+  return value as SessionPhase;
+}
+
+function validateCurrentStatus(value: string): SessionCurrentStatus {
+  if (!CURRENT_STATUSES.has(value as SessionCurrentStatus)) {
+    throw new SessionStoreError("invalid_status", "Session current status is not allowed.");
+  }
+  return value as SessionCurrentStatus;
+}
