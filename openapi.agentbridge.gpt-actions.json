@@ -332,12 +332,49 @@
           }
         },
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "actor",
+                  "type",
+                  "summary"
+                ],
+                "properties": {
+                  "actor": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "chatgpt",
+                      "codex",
+                      "system"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "note",
+                      "decision",
+                      "correction",
+                      "handoff",
+                      "implementation",
+                      "review",
+                      "test_result",
+                      "commit",
+                      "warning",
+                      "blocker"
+                    ]
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
               }
             }
           }
@@ -391,12 +428,56 @@
           }
         },
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "from",
+                  "to",
+                  "title",
+                  "message"
+                ],
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "chatgpt",
+                      "codex",
+                      "system"
+                    ]
+                  },
+                  "to": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "chatgpt",
+                      "codex",
+                      "system"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "constraints": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "expected_output": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false
               }
             }
           }
@@ -459,12 +540,32 @@
           }
         },
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "acknowledged",
+                      "in_progress",
+                      "done",
+                      "blocked",
+                      "cancelled",
+                      "superseded"
+                    ]
+                  },
+                  "result_summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
               }
             }
           }
@@ -518,12 +619,39 @@
           }
         },
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "goal"
+                ],
+                "properties": {
+                  "goal": {
+                    "type": "string"
+                  },
+                  "phase": {
+                    "type": "string",
+                    "enum": [
+                      "planning",
+                      "implementation",
+                      "review",
+                      "blocked",
+                      "done"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "in_progress",
+                      "blocked",
+                      "done"
+                    ]
+                  }
+                },
+                "additionalProperties": false
               }
             }
           }

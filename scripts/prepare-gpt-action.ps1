@@ -30,6 +30,7 @@ $SchemaSource = Join-Path $Root "openapi.agentbridge.gpt-actions.json"
 $SchemaLive = Join-Path $BridgeDir "openapi-gpt-actions-live.json"
 $SetupFile = Join-Path $BridgeDir "GPT_ACTION_SETUP.txt"
 $LocalUrl = "http://${HostName}:$Port"
+$Generator = Join-Path $Root "scripts\generate-openapi.mjs"
 
 Say "AgentBridge GPT Actions One-Click Setup"
 Write-Host "Root: $Root"
@@ -38,6 +39,20 @@ Write-Host "Local URL: $LocalUrl"
 if (!(Test-Path $BridgeDir)) {
   New-Item -ItemType Directory -Path $BridgeDir | Out-Null
 }
+
+Say "Refresh OpenAPI schema"
+
+if (!(Test-Path $Generator)) {
+  Fail "Missing file: $Generator"
+  exit 1
+}
+
+node $Generator
+if ($LASTEXITCODE -ne 0) {
+  Fail "OpenAPI schema generation failed"
+  exit 1
+}
+Ok "OpenAPI schema regenerated"
 
 if (!(Test-Path $SchemaSource)) {
   Fail "Missing file: $SchemaSource"

@@ -9,6 +9,14 @@ interface OperationSpec {
   operationId?: string;
   description?: string;
   parameters?: Array<Record<string, unknown>>;
+  requestBody?: {
+    required?: boolean;
+    content?: {
+      "application/json"?: {
+        schema?: Record<string, unknown>;
+      };
+    };
+  };
 }
 
 interface OpenApiSpec {
@@ -27,6 +35,10 @@ function operations(spec: OpenApiSpec): OperationSpec[] {
 
 function parameterByName(operation: OperationSpec, name: string): Record<string, unknown> | undefined {
   return operation.parameters?.find((parameter) => parameter.name === name);
+}
+
+function jsonRequestBodySchema(operation: OperationSpec): Record<string, unknown> | undefined {
+  return operation.requestBody?.content?.["application/json"]?.schema;
 }
 
 describe("ChatGPT tool adapter OpenAPI spec", () => {
@@ -178,6 +190,58 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
       for (const operation of operations(spec)) {
         expect(typeof operation.description).toBe("string");
         expect(operation.description?.length).toBeLessThanOrEqual(300);
+      }
+    }
+  });
+
+  it("defines explicit request body properties for v0.6 session write endpoints", () => {
+    const expected = [
+      {
+        pathName: "/chatgpt/projects/{projectId}/session/events",
+        operationId: "appendSessionEvent",
+        required: ["actor", "type", "summary"],
+        properties: ["actor", "type", "summary", "details"]
+      },
+      {
+        pathName: "/chatgpt/projects/{projectId}/session/handoffs",
+        operationId: "addSessionHandoff",
+        required: ["from", "to", "title", "message"],
+        properties: ["from", "to", "title", "message", "constraints", "expected_output"]
+      },
+      {
+        pathName: "/chatgpt/projects/{projectId}/session/handoffs/{handoffId}",
+        operationId: "updateSessionHandoff",
+        required: ["status"],
+        properties: ["status", "result_summary"]
+      },
+      {
+        pathName: "/chatgpt/projects/{projectId}/session/goal",
+        operationId: "setSessionGoal",
+        required: ["goal"],
+        properties: ["goal", "phase", "status"]
+      }
+    ];
+
+    for (const filePath of [specPath, gptActionsSpecPath]) {
+      const spec = JSON.parse(fs.readFileSync(filePath, "utf8")) as OpenApiSpec;
+
+      for (const item of expected) {
+        const operation = spec.paths[item.pathName].post;
+        expect(operation.operationId).toBe(item.operationId);
+
+        const schema = jsonRequestBodySchema(operation);
+        expect(schema).toBeDefined();
+        expect(schema).toMatchObject({
+          type: "object",
+          additionalProperties: false
+        });
+        expect(operation.requestBody?.required).toBe(true);
+        expect(schema?.required).toEqual(item.required);
+        expect(Object.keys(schema?.properties as Record<string, unknown>)).toEqual(item.properties);
+        expect(schema).not.toEqual({
+          type: "object",
+          additionalProperties: true
+        });
       }
     }
   });
