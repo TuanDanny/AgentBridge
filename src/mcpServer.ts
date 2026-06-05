@@ -5,8 +5,20 @@ import { appendText, readTextIfExists, writeText } from "./fsx.js";
 import { getGitInfo } from "./git.js";
 import { bridgePath, resolveProjectRoot } from "./paths.js";
 import { redactSecrets } from "./redact.js";
+import { projectIdFromRoot, validateProjectId } from "./registry.js";
 import { classifyCommand, createApproval } from "./safety.js";
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
+import {
+  addSessionHandoff,
+  appendSessionEvent,
+  getOrCreateActiveSession,
+  getSessionSummary,
+  getSessionUpdates,
+  listSessionHandoffs,
+  setSessionGoal,
+  updateSessionHandoff
+} from "./sessionStore.js";
+import type { SessionHandoffStatus } from "./sessionTypes.js";
 import {
   captureProject,
   createChatGptReview,
@@ -35,6 +47,38 @@ function readSessionSummary(root: string): Record<string, unknown> {
     next_action: session.next_action,
     updated_at: session.updated_at
   };
+}
+
+const sessionActorSchema = z.enum(["user", "chatgpt", "codex", "system"]);
+const sessionEventTypeSchema = z.enum([
+  "note",
+  "decision",
+  "correction",
+  "handoff",
+  "implementation",
+  "review",
+  "test_result",
+  "commit",
+  "warning",
+  "blocker"
+]);
+const sessionHandoffStatusSchema = z.enum(["open", "acknowledged", "in_progress", "done", "blocked", "cancelled", "superseded"]);
+const sessionHandoffListStatusSchema = z.enum([
+  "open",
+  "acknowledged",
+  "in_progress",
+  "done",
+  "blocked",
+  "cancelled",
+  "superseded",
+  "active"
+]);
+const sessionPhaseSchema = z.enum(["planning", "implementation", "review", "blocked", "done"]);
+const sessionCurrentStatusSchema = z.enum(["active", "in_progress", "blocked", "done"]);
+const activeHandoffStatuses = new Set<SessionHandoffStatus>(["open", "acknowledged", "in_progress", "blocked"]);
+
+function sessionProjectId(root: string, projectId?: string): string {
+  return projectId ? validateProjectId(projectId) : projectIdFromRoot(root);
 }
 
 export function createAgentBridgeMcpServer(rootInput = process.cwd()): McpServer {
@@ -85,6 +129,238 @@ export function createAgentBridgeMcpServer(rootInput = process.cwd()): McpServer
       }
     },
     async () => textResult(JSON.stringify(readSessionSummary(root), null, 2), readSessionSummary(root))
+  );
+
+  server.registerTool(
+    "session_active",
+    {
+      title: "Get Shared Session Active",
+      description: "Get or create the active shared workspace session for a project.",
+      inputSchema: {
+        project_id: z.string().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const view = getOrCreateActiveSession(root, projectId);
+      const structured = {
+        ok: true,
+        project_id: projectId,
+        session_id: view.active_session.session_id,
+        revision: view.active_session.revision,
+        active_session: view.active_session,
+        summary: view.summary
+      };
+      return textResult(JSON.stringify(structured, null, 2), structured);
+    }
+  );
+
+  server.registerTool(
+    "session_summary",
+    {
+      title: "Get Shared Session Summary",
+      description: "Return the shared workspace session summary for Codex/local MCP use.",
+      inputSchema: {
+        project_id: z.string().optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const summary = getSessionSummary(root, projectId);
+      return textResult(JSON.stringify({ ok: true, summary }, null, 2), { ok: true, summary });
+    }
+  );
+
+  server.registerTool(
+    "session_updates",
+    {
+      title: "Get Shared Session Updates",
+      description: "Return shared session events and handoffs after a revision.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        since_revision: z.number().int().min(0).default(0)
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, since_revision }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const updates = getSessionUpdates(root, projectId, since_revision);
+      return textResult(JSON.stringify(updates, null, 2), { ...updates });
+    }
+  );
+
+  server.registerTool(
+    "session_list_handoffs",
+    {
+      title: "List Shared Session Handoffs",
+      description: "List shared session handoffs, optionally filtered by status.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        status: sessionHandoffListStatusSchema.optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, status }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = listSessionHandoffs(root, projectId);
+      const handoffs =
+        status === "active"
+          ? result.handoffs.filter((handoff) => activeHandoffStatuses.has(handoff.status))
+          : status
+            ? result.handoffs.filter((handoff) => handoff.status === status)
+            : result.handoffs;
+      const structured = { ok: true, project_id: projectId, handoffs };
+      return textResult(JSON.stringify(structured, null, 2), structured);
+    }
+  );
+
+  server.registerTool(
+    "session_append_event",
+    {
+      title: "Append Shared Session Event",
+      description: "Append a redacted event to the shared workspace session.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        actor: sessionActorSchema,
+        type: sessionEventTypeSchema,
+        summary: z.string(),
+        details: z.string().optional(),
+        expected_revision: z.number().int().min(0).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, actor, type, summary, details, expected_revision }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = appendSessionEvent(root, projectId, { actor, type, summary, details, expected_revision });
+      return textResult(JSON.stringify(result, null, 2), result);
+    }
+  );
+
+  server.registerTool(
+    "session_add_handoff",
+    {
+      title: "Add Shared Session Handoff",
+      description: "Create a redacted shared session handoff visible through CLI and GPT Actions.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        from: sessionActorSchema.default("codex"),
+        to: sessionActorSchema,
+        title: z.string(),
+        message: z.string(),
+        constraints: z.array(z.string()).optional(),
+        expected_output: z.array(z.string()).optional(),
+        expected_revision: z.number().int().min(0).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, from, to, title, message, constraints, expected_output, expected_revision }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = addSessionHandoff(root, projectId, {
+        from,
+        to,
+        title,
+        message,
+        constraints,
+        expected_output,
+        expected_revision
+      });
+      return textResult(JSON.stringify(result, null, 2), result);
+    }
+  );
+
+  server.registerTool(
+    "session_update_handoff",
+    {
+      title: "Update Shared Session Handoff",
+      description: "Update a shared session handoff status or result summary.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        handoff_id: z.string(),
+        status: sessionHandoffStatusSchema,
+        result_summary: z.string().optional(),
+        expected_revision: z.number().int().min(0).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, handoff_id, status, result_summary, expected_revision }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = updateSessionHandoff(root, projectId, handoff_id, {
+        actor: "codex",
+        status,
+        result_summary,
+        expected_revision
+      });
+      return textResult(JSON.stringify(result, null, 2), result);
+    }
+  );
+
+  server.registerTool(
+    "session_set_goal",
+    {
+      title: "Set Shared Session Goal",
+      description: "Set the shared workspace session goal, phase, and status.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        goal: z.string(),
+        phase: sessionPhaseSchema.optional(),
+        status: sessionCurrentStatusSchema.optional(),
+        expected_revision: z.number().int().min(0).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, goal, phase, status, expected_revision }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = setSessionGoal(root, projectId, {
+        actor: "codex",
+        goal,
+        phase,
+        status,
+        expected_revision
+      });
+      return textResult(JSON.stringify(result, null, 2), result);
+    }
   );
 
   server.registerTool(
