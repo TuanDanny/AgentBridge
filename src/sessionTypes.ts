@@ -25,6 +25,18 @@ export type SessionHandoffStatus =
 
 export type SessionPhase = "planning" | "implementation" | "review" | "blocked" | "done";
 export type SessionCurrentStatus = "active" | "in_progress" | "blocked" | "done";
+export type SessionEvidenceKind =
+  | "tree_seen"
+  | "file_read"
+  | "file_search"
+  | "grep_seen"
+  | "inspect_seen"
+  | "codex_changes_seen"
+  | "review_packet_seen";
+export type SessionEvidenceSource = "http" | "cli" | "mcp" | "github" | "script" | "system";
+export type SessionEvidenceStatus = "seen" | "complete" | "partial" | "truncated" | "blocked" | "error";
+export type SessionCheckType = "build" | "test" | "diff_check" | "workflow" | "smoke";
+export type SessionCheckStatus = "pass" | "fail" | "warning" | "unknown" | "skipped";
 
 export interface ActiveSessionFile {
   schema_version: 1;
@@ -100,6 +112,39 @@ export interface SharedSessionHandoff {
   truncated: boolean;
 }
 
+export interface SharedSessionEvidence {
+  id: string;
+  seq: number;
+  revision: number;
+  time: string;
+  actor: SessionActor;
+  kind: SessionEvidenceKind;
+  source: SessionEvidenceSource;
+  project_id: string;
+  path?: string;
+  status: SessionEvidenceStatus;
+  purpose?: string;
+  metadata: Record<string, unknown>;
+  redacted: boolean;
+  truncated: boolean;
+}
+
+export interface SharedSessionCheck {
+  id: string;
+  seq: number;
+  revision: number;
+  time: string;
+  actor: SessionActor;
+  type: SessionCheckType;
+  command?: string;
+  status: SessionCheckStatus;
+  exit_code?: number;
+  summary: string;
+  duration_ms?: number;
+  redacted: boolean;
+  truncated: boolean;
+}
+
 export interface SharedSessionSummaryFile {
   schema_version: 1;
   project_id: string;
@@ -111,6 +156,8 @@ export interface SharedSessionSummaryFile {
   phase: SessionPhase;
   recent_events: SharedSessionEvent[];
   open_handoffs: SharedSessionHandoff[];
+  recent_evidence: SharedSessionEvidence[];
+  recent_checks: SharedSessionCheck[];
   next_steps: string[];
   do_not_do: string[];
   warnings: string[];
@@ -150,6 +197,28 @@ export interface SetSessionGoalInput {
   expected_revision?: number;
 }
 
+export interface AppendSessionEvidenceInput {
+  actor?: SessionActor;
+  kind: SessionEvidenceKind;
+  source: SessionEvidenceSource;
+  path?: string;
+  status: SessionEvidenceStatus;
+  purpose?: string;
+  metadata?: Record<string, unknown>;
+  expected_revision?: number;
+}
+
+export interface AppendSessionCheckInput {
+  actor?: SessionActor;
+  type: SessionCheckType;
+  command?: string;
+  status: SessionCheckStatus;
+  exit_code?: number;
+  summary: string;
+  duration_ms?: number;
+  expected_revision?: number;
+}
+
 export interface SharedSessionView {
   ok: true;
   active_session: ActiveSessionFile;
@@ -166,5 +235,7 @@ export interface SessionUpdatesResult {
   to_revision: number;
   events: SharedSessionEvent[];
   handoffs: SharedSessionHandoff[];
+  evidence: SharedSessionEvidence[];
+  checks: SharedSessionCheck[];
   summary_changed: boolean;
 }

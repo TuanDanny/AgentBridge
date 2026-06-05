@@ -7,15 +7,24 @@ import { sanitizeSessionText, sanitizeSessionTextArray } from "./sessionRedactio
 import {
   SESSION_SCHEMA_VERSION,
   type ActiveSessionFile,
+  type AppendSessionCheckInput,
+  type AppendSessionEvidenceInput,
   type AddSessionHandoffInput,
   type AppendSessionEventInput,
   type SessionActor,
+  type SessionCheckStatus,
+  type SessionCheckType,
   type SessionCurrentStatus,
+  type SessionEvidenceKind,
+  type SessionEvidenceSource,
+  type SessionEvidenceStatus,
   type SessionEventType,
   type SessionHandoffStatus,
   type SessionPhase,
   type SessionUpdatesResult,
   type SetSessionGoalInput,
+  type SharedSessionCheck,
+  type SharedSessionEvidence,
   type SharedSessionEvent,
   type SharedSessionFile,
   type SharedSessionHandoff,
@@ -34,6 +43,12 @@ const ARRAY_MAX = 20;
 const WARNING_MAX = 25;
 const RECENT_EVENT_MAX = 10;
 const OPEN_HANDOFF_MAX = 10;
+const RECENT_EVIDENCE_MAX = 8;
+const RECENT_CHECK_MAX = 8;
+const METADATA_STRING_MAX = 500;
+const METADATA_ARRAY_MAX = 20;
+const METADATA_KEY_MAX = 80;
+const METADATA_JSON_MAX = 4000;
 
 const ACTORS = new Set<SessionActor>(["user", "chatgpt", "codex", "system"]);
 const EVENT_TYPES = new Set<SessionEventType>([
@@ -60,6 +75,19 @@ const HANDOFF_STATUSES = new Set<SessionHandoffStatus>([
 const PHASES = new Set<SessionPhase>(["planning", "implementation", "review", "blocked", "done"]);
 const CURRENT_STATUSES = new Set<SessionCurrentStatus>(["active", "in_progress", "blocked", "done"]);
 const OPEN_HANDOFF_STATUSES = new Set<SessionHandoffStatus>(["open", "acknowledged", "in_progress", "blocked"]);
+const EVIDENCE_KINDS = new Set<SessionEvidenceKind>([
+  "tree_seen",
+  "file_read",
+  "file_search",
+  "grep_seen",
+  "inspect_seen",
+  "codex_changes_seen",
+  "review_packet_seen"
+]);
+const EVIDENCE_SOURCES = new Set<SessionEvidenceSource>(["http", "cli", "mcp", "github", "script", "system"]);
+const EVIDENCE_STATUSES = new Set<SessionEvidenceStatus>(["seen", "complete", "partial", "truncated", "blocked", "error"]);
+const CHECK_TYPES = new Set<SessionCheckType>(["build", "test", "diff_check", "workflow", "smoke"]);
+const CHECK_STATUSES = new Set<SessionCheckStatus>(["pass", "fail", "warning", "unknown", "skipped"]);
 
 export class SessionStoreError extends Error {
   code: string;
@@ -288,6 +316,104 @@ export function setSessionGoal(
   return { ok: true, summary, revision, event };
 }
 
+export function appendSessionEvidence(
+  registryRoot: string,
+  projectIdInput: string,
+  input: AppendSessionEvidenceInput
+): { ok: true; evidence: SharedSessionEvidence; summary: SharedSessionSummaryFile; revision: number } {
+  const projectId = validateProjectId(projectIdInput);
+  const actor = validateActor(input.actor ?? "system");
+  const kind = validateEvidenceKind(input.kind);
+  const source = validateEvidenceSource(input.source);
+  const status = validateEvidenceStatus(input.status);
+  const pathValue = input.path ? sanitizeSessionText(input.path, METADATA_STRING_MAX) : undefined;
+  const purpose = input.purpose ? sanitizeSessionText(input.purpose, SUMMARY_MAX) : undefined;
+  const metadata = sanitizeSessionMetadata(input.metadata ?? {});
+
+  const bundle = readSessionBundle(registryRoot, projectId);
+  assertExpectedRevision(bundle.state.revision, input.expected_revision);
+  const evidenceItems = readJsonLines<SharedSessionEvidence>(bundle.paths.evidence);
+  const revision = bundle.state.revision + 1;
+  const evidence: SharedSessionEvidence = {
+    id: evidenceId(evidenceItems.length + 1),
+    seq: evidenceItems.length + 1,
+    revision,
+    time: new Date().toISOString(),
+    actor,
+    kind,
+    source,
+    project_id: projectId,
+    ...(pathValue?.text.trim() ? { path: pathValue.text.trim() } : {}),
+    status,
+    ...(purpose?.text.trim() ? { purpose: purpose.text.trim() } : {}),
+    metadata: metadata.value,
+    redacted: Boolean(pathValue?.redacted || purpose?.redacted || metadata.redacted),
+    truncated: Boolean(pathValue?.truncated || purpose?.truncated || metadata.truncated)
+  };
+
+  appendJsonLine(bundle.paths.evidence, evidence);
+  const state = updateStateForWrite(bundle.state, {
+    revision,
+    actor,
+    warning: evidence.truncated ? "Some session evidence metadata was truncated before storage." : undefined
+  });
+  writeStateSnapshots(bundle.paths, bundle.active, bundle.session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return { ok: true, evidence, summary, revision };
+}
+
+export function appendSessionCheck(
+  registryRoot: string,
+  projectIdInput: string,
+  input: AppendSessionCheckInput
+): { ok: true; check: SharedSessionCheck; summary: SharedSessionSummaryFile; revision: number } {
+  const projectId = validateProjectId(projectIdInput);
+  const actor = validateActor(input.actor ?? "codex");
+  const type = validateCheckType(input.type);
+  const status = validateCheckStatus(input.status);
+  const command = input.command ? sanitizeSessionText(input.command, SUMMARY_MAX) : undefined;
+  const summaryText = sanitizeSessionText(input.summary, SUMMARY_MAX);
+  if (!summaryText.text.trim()) {
+    throw new SessionStoreError("invalid_session_check", "Session check summary is required.");
+  }
+  if (input.exit_code !== undefined && (!Number.isInteger(input.exit_code) || input.exit_code < 0)) {
+    throw new SessionStoreError("invalid_session_check", "Session check exit_code must be a non-negative integer.");
+  }
+  if (input.duration_ms !== undefined && (!Number.isInteger(input.duration_ms) || input.duration_ms < 0)) {
+    throw new SessionStoreError("invalid_session_check", "Session check duration_ms must be a non-negative integer.");
+  }
+
+  const bundle = readSessionBundle(registryRoot, projectId);
+  assertExpectedRevision(bundle.state.revision, input.expected_revision);
+  const checks = readJsonLines<SharedSessionCheck>(bundle.paths.checks);
+  const revision = bundle.state.revision + 1;
+  const check: SharedSessionCheck = {
+    id: checkId(checks.length + 1),
+    seq: checks.length + 1,
+    revision,
+    time: new Date().toISOString(),
+    actor,
+    type,
+    ...(command?.text.trim() ? { command: command.text.trim() } : {}),
+    status,
+    ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
+    summary: summaryText.text.trim(),
+    ...(input.duration_ms !== undefined ? { duration_ms: input.duration_ms } : {}),
+    redacted: Boolean(command?.redacted || summaryText.redacted),
+    truncated: Boolean(command?.truncated || summaryText.truncated)
+  };
+
+  appendJsonLine(bundle.paths.checks, check);
+  const state = updateStateForWrite(bundle.state, {
+    revision,
+    actor,
+    warning: check.truncated ? "Some session check metadata was truncated before storage." : undefined
+  });
+  writeStateSnapshots(bundle.paths, bundle.active, bundle.session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return { ok: true, check, summary, revision };
+}
+
 export function getSessionUpdates(registryRoot: string, projectIdInput: string, sinceRevisionInput: number): SessionUpdatesResult {
   const projectId = validateProjectId(projectIdInput);
   if (!Number.isInteger(sinceRevisionInput) || sinceRevisionInput < 0) {
@@ -298,6 +424,8 @@ export function getSessionUpdates(registryRoot: string, projectIdInput: string, 
   const handoffs = currentHandoffs(readJsonLines<SharedSessionHandoff>(bundle.paths.handoffs)).filter(
     (handoff) => handoff.revision > sinceRevisionInput
   );
+  const evidence = readJsonLines<SharedSessionEvidence>(bundle.paths.evidence).filter((item) => item.revision > sinceRevisionInput);
+  const checks = readJsonLines<SharedSessionCheck>(bundle.paths.checks).filter((item) => item.revision > sinceRevisionInput);
   return {
     ok: true,
     project_id: projectId,
@@ -306,8 +434,32 @@ export function getSessionUpdates(registryRoot: string, projectIdInput: string, 
     to_revision: bundle.state.revision,
     events,
     handoffs,
+    evidence,
+    checks,
     summary_changed: bundle.state.revision > sinceRevisionInput
   };
+}
+
+export function getRecentEvidence(
+  registryRoot: string,
+  projectIdInput: string,
+  limit = RECENT_EVIDENCE_MAX
+): { ok: true; project_id: string; evidence: SharedSessionEvidence[] } {
+  const projectId = validateProjectId(projectIdInput);
+  const bundle = readSessionBundle(registryRoot, projectId);
+  const cappedLimit = Math.max(1, Math.min(limit, 50));
+  return { ok: true, project_id: projectId, evidence: readJsonLines<SharedSessionEvidence>(bundle.paths.evidence).slice(-cappedLimit) };
+}
+
+export function getRecentChecks(
+  registryRoot: string,
+  projectIdInput: string,
+  limit = RECENT_CHECK_MAX
+): { ok: true; project_id: string; checks: SharedSessionCheck[] } {
+  const projectId = validateProjectId(projectIdInput);
+  const bundle = readSessionBundle(registryRoot, projectId);
+  const cappedLimit = Math.max(1, Math.min(limit, 50));
+  return { ok: true, project_id: projectId, checks: readJsonLines<SharedSessionCheck>(bundle.paths.checks).slice(-cappedLimit) };
 }
 
 export function rebuildSessionSummary(registryRoot: string, projectIdInput: string): SharedSessionSummaryFile {
@@ -327,6 +479,8 @@ export function rebuildSessionSummary(registryRoot: string, projectIdInput: stri
     phase: bundle.state.current.phase,
     recent_events: events.slice(-RECENT_EVENT_MAX),
     open_handoffs: openHandoffs,
+    recent_evidence: readJsonLines<SharedSessionEvidence>(bundle.paths.evidence).slice(-RECENT_EVIDENCE_MAX),
+    recent_checks: readJsonLines<SharedSessionCheck>(bundle.paths.checks).slice(-RECENT_CHECK_MAX),
     next_steps: bundle.state.next_steps,
     do_not_do: bundle.state.do_not_do,
     warnings: bundle.state.warnings,
@@ -407,6 +561,8 @@ interface SessionPathSet {
   summary: string;
   events: string;
   handoffs: string;
+  evidence: string;
+  checks: string;
 }
 
 interface SessionBundle {
@@ -477,6 +633,12 @@ function ensureSessionFiles(
   if (!pathExists(paths.handoffs)) {
     fs.writeFileSync(paths.handoffs, "", "utf8");
   }
+  if (!pathExists(paths.evidence)) {
+    fs.writeFileSync(paths.evidence, "", "utf8");
+  }
+  if (!pathExists(paths.checks)) {
+    fs.writeFileSync(paths.checks, "", "utf8");
+  }
 }
 
 function writeStateSnapshots(
@@ -503,7 +665,7 @@ function writeStateSnapshots(
 
 function updateStateForWrite(
   state: SharedSessionStateFile,
-  args: { revision: number; actor: SessionActor; lastEventId: string; warning?: string }
+  args: { revision: number; actor: SessionActor; lastEventId?: string; warning?: string }
 ): SharedSessionStateFile {
   const warnings = [...state.warnings];
   if (args.warning && !warnings.includes(args.warning)) {
@@ -512,7 +674,7 @@ function updateStateForWrite(
   return {
     ...state,
     revision: args.revision,
-    last_event_id: args.lastEventId,
+    last_event_id: args.lastEventId ?? state.last_event_id,
     last_actor: args.actor,
     warnings: warnings.slice(-WARNING_MAX),
     updated_at: new Date().toISOString()
@@ -645,7 +807,9 @@ function sessionPaths(registryRoot: string, projectId: string, sessionId: string
     state: path.join(sessionDir, "state.json"),
     summary: path.join(sessionDir, "summary.json"),
     events: path.join(sessionDir, "events.jsonl"),
-    handoffs: path.join(sessionDir, "handoffs.jsonl")
+    handoffs: path.join(sessionDir, "handoffs.jsonl"),
+    evidence: path.join(sessionDir, "evidence.jsonl"),
+    checks: path.join(sessionDir, "checks.jsonl")
   };
 }
 
@@ -663,6 +827,14 @@ function eventId(seq: number): string {
 
 function handoffId(seq: number): string {
   return `handoff_${seq.toString().padStart(6, "0")}`;
+}
+
+function evidenceId(seq: number): string {
+  return `evd_${seq.toString().padStart(6, "0")}`;
+}
+
+function checkId(seq: number): string {
+  return `chk_${seq.toString().padStart(6, "0")}`;
 }
 
 function assertExpectedRevision(currentRevision: number, expectedRevision?: number): void {
@@ -708,4 +880,130 @@ function validateCurrentStatus(value: string): SessionCurrentStatus {
     throw new SessionStoreError("invalid_status", "Session current status is not allowed.");
   }
   return value as SessionCurrentStatus;
+}
+
+function validateEvidenceKind(value: string): SessionEvidenceKind {
+  if (!EVIDENCE_KINDS.has(value as SessionEvidenceKind)) {
+    throw new SessionStoreError("invalid_evidence_kind", "Session evidence kind is not allowed.");
+  }
+  return value as SessionEvidenceKind;
+}
+
+function validateEvidenceSource(value: string): SessionEvidenceSource {
+  if (!EVIDENCE_SOURCES.has(value as SessionEvidenceSource)) {
+    throw new SessionStoreError("invalid_evidence_source", "Session evidence source is not allowed.");
+  }
+  return value as SessionEvidenceSource;
+}
+
+function validateEvidenceStatus(value: string): SessionEvidenceStatus {
+  if (!EVIDENCE_STATUSES.has(value as SessionEvidenceStatus)) {
+    throw new SessionStoreError("invalid_evidence_status", "Session evidence status is not allowed.");
+  }
+  return value as SessionEvidenceStatus;
+}
+
+function validateCheckType(value: string): SessionCheckType {
+  if (!CHECK_TYPES.has(value as SessionCheckType)) {
+    throw new SessionStoreError("invalid_check_type", "Session check type is not allowed.");
+  }
+  return value as SessionCheckType;
+}
+
+function validateCheckStatus(value: string): SessionCheckStatus {
+  if (!CHECK_STATUSES.has(value as SessionCheckStatus)) {
+    throw new SessionStoreError("invalid_check_status", "Session check status is not allowed.");
+  }
+  return value as SessionCheckStatus;
+}
+
+function sanitizeSessionMetadata(input: Record<string, unknown>): {
+  value: Record<string, unknown>;
+  redacted: boolean;
+  truncated: boolean;
+} {
+  const output: Record<string, unknown> = {};
+  let redacted = false;
+  let truncated = false;
+
+  for (const [rawKey, rawValue] of Object.entries(input).slice(0, METADATA_ARRAY_MAX)) {
+    const key = sanitizeMetadataKey(rawKey);
+    if (!key || isBlockedMetadataKey(key)) {
+      truncated = true;
+      continue;
+    }
+    const sanitized = sanitizeMetadataValue(rawValue, 0, key);
+    output[key] = sanitized.value;
+    redacted = redacted || sanitized.redacted;
+    truncated = truncated || sanitized.truncated;
+  }
+
+  const serialized = JSON.stringify(output);
+  if (serialized.length > METADATA_JSON_MAX) {
+    return {
+      value: {
+        note: "metadata truncated",
+        original_keys: Object.keys(output).slice(0, METADATA_ARRAY_MAX)
+      },
+      redacted,
+      truncated: true
+    };
+  }
+
+  return { value: output, redacted, truncated };
+}
+
+function sanitizeMetadataValue(
+  input: unknown,
+  depth: number,
+  key = ""
+): { value: unknown; redacted: boolean; truncated: boolean } {
+  if (input === null || typeof input === "boolean") {
+    return { value: input, redacted: false, truncated: false };
+  }
+  if (typeof input === "number") {
+    return { value: Number.isFinite(input) ? input : null, redacted: false, truncated: !Number.isFinite(input) };
+  }
+  if (typeof input === "string") {
+    if (key.toLowerCase() === "query" && looksSensitiveMetadataQuery(input)) {
+      return { value: "[REDACTED]", redacted: true, truncated: false };
+    }
+    const sanitized = sanitizeSessionText(input, METADATA_STRING_MAX);
+    return { value: sanitized.text, redacted: sanitized.redacted, truncated: sanitized.truncated };
+  }
+  if (Array.isArray(input)) {
+    const values: unknown[] = [];
+    let redacted = false;
+    let truncated = input.length > METADATA_ARRAY_MAX;
+    for (const item of input.slice(0, METADATA_ARRAY_MAX)) {
+      const sanitized = sanitizeMetadataValue(item, depth + 1, key);
+      values.push(sanitized.value);
+      redacted = redacted || sanitized.redacted;
+      truncated = truncated || sanitized.truncated;
+    }
+    return { value: values, redacted, truncated };
+  }
+  if (input && typeof input === "object" && depth < 2) {
+    const sanitized = sanitizeSessionMetadata(input as Record<string, unknown>);
+    return sanitized;
+  }
+  return { value: String(input ?? ""), redacted: false, truncated: true };
+}
+
+function sanitizeMetadataKey(input: string): string {
+  return input.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, METADATA_KEY_MAX);
+}
+
+function isBlockedMetadataKey(key: string): boolean {
+  return /^(content|raw_content|file_content|diff|raw_diff|snippet|authorization|local_token)$/i.test(key);
+}
+
+function looksSensitiveMetadataQuery(input: string): boolean {
+  const value = input.trim();
+  return (
+    value.length >= 20 &&
+    (/(?:token|secret|key|password|auth|jwt|bearer|credential|manual_grep|gamma_grep|codexlink_gamma)/i.test(value) ||
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(value) ||
+      (/[A-Z]/.test(value) && /[0-9]/.test(value) && /[_-]/.test(value)))
+  );
 }

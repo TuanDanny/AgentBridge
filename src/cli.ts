@@ -68,18 +68,29 @@ import {
 } from "./inspector.js";
 import {
   addSessionHandoff,
+  appendSessionCheck,
   appendSessionEvent,
   formatSessionHandoffs,
   formatSessionSummary,
   formatSessionUpdates,
   getOrCreateActiveSession,
+  getRecentChecks,
+  getRecentEvidence,
   getSessionSummary,
   getSessionUpdates,
   listSessionHandoffs,
   setSessionGoal,
   updateSessionHandoff
 } from "./sessionStore.js";
-import type { SessionActor, SessionCurrentStatus, SessionEventType, SessionHandoffStatus, SessionPhase } from "./sessionTypes.js";
+import type {
+  SessionActor,
+  SessionCheckStatus,
+  SessionCheckType,
+  SessionCurrentStatus,
+  SessionEventType,
+  SessionHandoffStatus,
+  SessionPhase
+} from "./sessionTypes.js";
 
 function printResult(result: { message: string; bridgeDir: string; changedFiles: string[] }): void {
   console.log(result.message);
@@ -565,6 +576,113 @@ session
       handleError(error);
     }
   });
+
+session
+  .command("evidence")
+  .description("List recent shared session evidence metadata.")
+  .argument("<projectId>", "safe project id")
+  .option("--recent", "show recent evidence metadata", true)
+  .option("--limit <count>", "maximum evidence entries", "8")
+  .option("--json", "print JSON result")
+  .action((projectId: string, options: { recent?: boolean; limit: string; json?: boolean }) => {
+    try {
+      const resolvedProjectId = resolveCliSessionProject(projectId);
+      const limit = parseNonNegativeIntegerOption(options.limit, "--limit");
+      const result = getRecentEvidence(process.cwd(), resolvedProjectId, limit || 8);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        [
+          `Session evidence: ${resolvedProjectId}`,
+          "",
+          ...(result.evidence.length
+            ? result.evidence.map((item) => `- r${item.revision} ${item.kind}/${item.status}${item.path ? ` ${item.path}` : ""}`)
+            : ["- None"])
+        ].join("\n")
+      );
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+session
+  .command("checks")
+  .description("List recent shared session check metadata.")
+  .argument("<projectId>", "safe project id")
+  .option("--recent", "show recent check metadata", true)
+  .option("--limit <count>", "maximum check entries", "8")
+  .option("--json", "print JSON result")
+  .action((projectId: string, options: { recent?: boolean; limit: string; json?: boolean }) => {
+    try {
+      const resolvedProjectId = resolveCliSessionProject(projectId);
+      const limit = parseNonNegativeIntegerOption(options.limit, "--limit");
+      const result = getRecentChecks(process.cwd(), resolvedProjectId, limit || 8);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        [
+          `Session checks: ${resolvedProjectId}`,
+          "",
+          ...(result.checks.length
+            ? result.checks.map((item) => `- r${item.revision} ${item.type}/${item.status}: ${item.summary}`)
+            : ["- None"])
+        ].join("\n")
+      );
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+session
+  .command("check")
+  .description("Append shared session check metadata without running a command.")
+  .argument("<projectId>", "safe project id")
+  .requiredOption("--type <type>", "build, test, diff_check, workflow, or smoke")
+  .requiredOption("--status <status>", "pass, fail, warning, unknown, or skipped")
+  .requiredOption("--summary <summary>", "short check summary")
+  .option("--actor <actor>", "actor recording the check", "codex")
+  .option("--command <command>", "command that produced this result")
+  .option("--exit-code <code>", "non-negative exit code")
+  .option("--duration-ms <ms>", "non-negative duration in milliseconds")
+  .option("--expected-revision <revision>", "optional optimistic concurrency revision")
+  .option("--json", "print JSON result")
+  .action(
+    (
+      projectId: string,
+      options: {
+        type: string;
+        status: string;
+        summary: string;
+        actor: string;
+        command?: string;
+        exitCode?: string;
+        durationMs?: string;
+        expectedRevision?: string;
+        json?: boolean;
+      }
+    ) => {
+      try {
+        const resolvedProjectId = resolveCliSessionProject(projectId);
+        const result = appendSessionCheck(process.cwd(), resolvedProjectId, {
+          actor: options.actor as SessionActor,
+          type: options.type as SessionCheckType,
+          status: options.status as SessionCheckStatus,
+          summary: options.summary,
+          command: options.command,
+          ...(options.exitCode ? { exit_code: parseNonNegativeIntegerOption(options.exitCode, "--exit-code") } : {}),
+          ...(options.durationMs ? { duration_ms: parseNonNegativeIntegerOption(options.durationMs, "--duration-ms") } : {}),
+          ...(options.expectedRevision ? { expected_revision: parseNonNegativeIntegerOption(options.expectedRevision, "--expected-revision") } : {})
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionSummary(result.summary));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
 
 session
   .command("event")

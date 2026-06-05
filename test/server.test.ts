@@ -1120,6 +1120,56 @@ describe("local daemon", () => {
     expect(missingFile.body.read_status).toBe("not_found");
     expect(missingFile.body.coverage_warning).toContain("not found");
 
+    const sessionSummary = await requestJson<{
+      summary: {
+        session_id: string;
+        recent_evidence: Array<{ kind: string; status: string; metadata: Record<string, unknown>; path?: string }>;
+        recent_checks: unknown[];
+      };
+    }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/GammaProject/session/summary",
+      token: localToken
+    });
+    expect(sessionSummary.status).toBe(200);
+    expect(Array.isArray(sessionSummary.body.summary.recent_evidence)).toBe(true);
+    expect(Array.isArray(sessionSummary.body.summary.recent_checks)).toBe(true);
+
+    const sessionUpdates = await requestJson<{
+      evidence: Array<{ kind: string; status: string; metadata: Record<string, unknown>; path?: string }>;
+    }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/GammaProject/session/updates?since_revision=1",
+      token: localToken
+    });
+    expect(sessionUpdates.status).toBe(200);
+    const evidenceKinds = sessionUpdates.body.evidence.map((item) => item.kind);
+    expect(evidenceKinds).toEqual(expect.arrayContaining(["tree_seen", "file_search", "file_read", "grep_seen"]));
+    expect(sessionUpdates.body.evidence.some((item) => item.kind === "file_read" && item.path === noteFile && item.status === "complete")).toBe(true);
+    expect(sessionUpdates.body.evidence.some((item) => item.kind === "file_read" && item.path === largeFile && item.status === "partial")).toBe(true);
+    expect(sessionUpdates.body.evidence.some((item) => item.kind === "file_read" && item.status === "blocked")).toBe(true);
+    const grepEvidence = sessionUpdates.body.evidence.find((item) => item.kind === "grep_seen");
+    expect(grepEvidence?.metadata.query).toBe("[REDACTED]");
+    expect(grepEvidence?.metadata).not.toHaveProperty("snippet");
+    expect(grepEvidence?.metadata).not.toHaveProperty("content");
+
+    const evidenceFile = path.join(
+      serverRoot,
+      ".agentbridge",
+      "sessions",
+      "GammaProject",
+      sessionSummary.body.summary.session_id,
+      "evidence.jsonl"
+    );
+    const evidenceText = fs.readFileSync(evidenceFile, "utf8");
+    expect(evidenceText).not.toContain(token);
+    expect(evidenceText).not.toContain(largeContent);
+    expect(evidenceText).not.toContain("Authorization: Bearer");
+    expect(evidenceText).not.toContain("local-token-value");
+    expect(evidenceText).not.toContain("OPENAI_API_KEY");
+
     const unknown = await requestJson({ host: running.info.host, port: running.info.port, path: "/chatgpt/projects/MissingProject/tree", token: localToken });
     expect(unknown.status).toBe(404);
     const rawProject = await requestJson({ host: running.info.host, port: running.info.port, path: "/chatgpt/projects/D:%5CAgentBridge/tree", token: localToken });

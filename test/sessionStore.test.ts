@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  appendSessionCheck,
+  appendSessionEvidence,
   addSessionHandoff,
   appendSessionEvent,
+  getRecentChecks,
+  getRecentEvidence,
   getOrCreateActiveSession,
   getSessionSummary,
   getSessionUpdates,
@@ -145,6 +149,72 @@ describe("shared session store", () => {
         status: "invalid" as never
       })
     ).toThrow("status");
+  });
+
+  it("stores evidence and checks as redacted metadata without raw content", () => {
+    const root = makeTempRoot();
+    const projectId = "AgentBridge";
+    const token = `sk-${"c".repeat(32)}`;
+    getOrCreateActiveSession(root, projectId);
+
+    const evidence = appendSessionEvidence(root, projectId, {
+      actor: "chatgpt",
+      kind: "file_read",
+      source: "http",
+      path: "src/example.ts",
+      status: "partial",
+      purpose: `review OPENAI_API_KEY=${token}`,
+      metadata: {
+        read_status: "partial",
+        bytes_returned: 123,
+        truncated: true,
+        content: `UNIQUE_RAW_CONTENT_VALUE ${token}`,
+        snippet: `snippet ${token}`,
+        query: `token=${token}`,
+        nested: {
+          secret: `Bearer ${"d".repeat(32)}`
+        }
+      }
+    });
+    expect(evidence.revision).toBe(2);
+    expect(evidence.evidence.redacted).toBe(true);
+    expect(evidence.evidence.metadata).not.toHaveProperty("content");
+    expect(evidence.evidence.metadata).not.toHaveProperty("snippet");
+
+    const check = appendSessionCheck(root, projectId, {
+      actor: "codex",
+      type: "test",
+      command: `npm test --token=${token}`,
+      status: "pass",
+      exit_code: 0,
+      summary: `96 tests passed with PASSWORD=${token}`,
+      duration_ms: 1234
+    });
+    expect(check.revision).toBe(3);
+    expect(check.check.summary).toContain("[REDACTED]");
+
+    const summary = getSessionSummary(root, projectId);
+    expect(summary.recent_evidence).toHaveLength(1);
+    expect(summary.recent_checks).toHaveLength(1);
+
+    const updates = getSessionUpdates(root, projectId, 1);
+    expect(updates.evidence).toHaveLength(1);
+    expect(updates.checks).toHaveLength(1);
+
+    expect(getRecentEvidence(root, projectId).evidence[0].kind).toBe("file_read");
+    expect(getRecentChecks(root, projectId).checks[0].type).toBe("test");
+
+    const sessionDir = path.join(root, ".agentbridge", "sessions", projectId, getOrCreateActiveSession(root, projectId).session.session_id);
+    const serialized = [
+      fs.readFileSync(path.join(sessionDir, "evidence.jsonl"), "utf8"),
+      fs.readFileSync(path.join(sessionDir, "checks.jsonl"), "utf8"),
+      fs.readFileSync(path.join(sessionDir, "summary.json"), "utf8")
+    ].join("\n");
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain("UNIQUE_RAW_CONTENT_VALUE");
+    expect(serialized).not.toContain("snippet ");
+    expect(serialized).not.toContain("Bearer d");
+    expect(serialized).not.toContain("OPENAI_API_KEY=");
   });
 
   it("keeps session runtime files ignored by git", () => {

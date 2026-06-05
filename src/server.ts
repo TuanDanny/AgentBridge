@@ -15,6 +15,7 @@ import { classifyCommand, createApproval, listApprovals, resolveApproval } from 
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
 import {
   addSessionHandoff,
+  appendSessionEvidence,
   appendSessionEvent,
   getProjectSession,
   getSessionSummary,
@@ -23,7 +24,14 @@ import {
   setSessionGoal,
   updateSessionHandoff
 } from "./sessionStore.js";
-import type { SessionActor, SessionCurrentStatus, SessionEventType, SessionHandoffStatus, SessionPhase } from "./sessionTypes.js";
+import type {
+  AppendSessionEvidenceInput,
+  SessionActor,
+  SessionCurrentStatus,
+  SessionEventType,
+  SessionHandoffStatus,
+  SessionPhase
+} from "./sessionTypes.js";
 import type { AgentBridgeSession, RiskLevel, ServerInfo, ServerOptions } from "./types.js";
 import { readActiveProject, selectActiveProject } from "./activeProject.js";
 
@@ -298,6 +306,25 @@ function sendSessionStoreError(response: http.ServerResponse, error: unknown): v
 
   const message = error instanceof Error ? error.message : String(error);
   sendJson(response, 400, { ok: false, error: { code: "invalid_session_request", message } });
+}
+
+function recordHttpEvidence(
+  registryRoot: string,
+  projectId: string,
+  input: Omit<AppendSessionEvidenceInput, "actor" | "source">
+): void {
+  appendSessionEvidence(registryRoot, projectId, {
+    ...input,
+    actor: "chatgpt",
+    source: "http"
+  });
+}
+
+function projectFileReadStatusFromError(error: ProjectFileError): "blocked" | "error" {
+  if (error.code === "blocked_sensitive_file" || error.code === "binary_file") {
+    return "blocked";
+  }
+  return "error";
 }
 
 function projectFileErrorCoverage(error: ProjectFileError): {
@@ -738,17 +765,28 @@ export async function startAgentBridgeServer(
           if (project.registered) {
             touchProject(root, project.id);
           }
-          sendJson(
-            response,
-            200,
-            getProjectTree(project.root, {
-              projectId: project.id,
-              maxDepth: queryInteger(url, "max_depth"),
-              maxEntries: queryInteger(url, "max_entries"),
-              includeHidden: queryBoolean(url, "include_hidden"),
-              includeSizes: queryBoolean(url, "include_sizes")
-            })
-          );
+          const tree = getProjectTree(project.root, {
+            projectId: project.id,
+            maxDepth: queryInteger(url, "max_depth"),
+            maxEntries: queryInteger(url, "max_entries"),
+            includeHidden: queryBoolean(url, "include_hidden"),
+            includeSizes: queryBoolean(url, "include_sizes")
+          });
+          recordHttpEvidence(root, project.id, {
+            kind: "tree_seen",
+            status: tree.truncated ? "partial" : "complete",
+            metadata: {
+              max_depth: tree.max_depth,
+              max_entries: tree.max_entries,
+              returned_entries: tree.returned_entries,
+              total_files: tree.total_files,
+              total_folders: tree.total_folders,
+              truncated: tree.truncated,
+              coverage_warning: tree.coverage_warning?.message ?? null,
+              scale_hint: tree.inventory.scale_hint
+            }
+          });
+          sendJson(response, 200, tree);
         } catch (error) {
           sendProjectFileError(response, error);
         }
@@ -773,17 +811,23 @@ export async function startAgentBridgeServer(
           if (project.registered) {
             touchProject(root, project.id);
           }
-          sendJson(
-            response,
-            200,
-            searchProjectFiles(project.root, {
-              projectId: project.id,
-              query: url.searchParams.get("q") ?? "",
-              maxResults: queryInteger(url, "max_results"),
-              maxDepth: queryInteger(url, "max_depth"),
-              caseSensitive: queryBoolean(url, "case_sensitive")
-            })
-          );
+          const search = searchProjectFiles(project.root, {
+            projectId: project.id,
+            query: url.searchParams.get("q") ?? "",
+            maxResults: queryInteger(url, "max_results"),
+            maxDepth: queryInteger(url, "max_depth"),
+            caseSensitive: queryBoolean(url, "case_sensitive")
+          });
+          recordHttpEvidence(root, project.id, {
+            kind: "file_search",
+            status: search.truncated ? "partial" : "complete",
+            metadata: {
+              query: search.query,
+              result_count: search.matches.length,
+              truncated: search.truncated
+            }
+          });
+          sendJson(response, 200, search);
         } catch (error) {
           sendProjectFileError(response, error);
         }
@@ -808,18 +852,43 @@ export async function startAgentBridgeServer(
           if (project.registered) {
             touchProject(root, project.id);
           }
-          sendJson(
-            response,
-            200,
-            readProjectFile(project.root, {
-              projectId: project.id,
-              relativePath: url.searchParams.get("path") ?? "",
-              maxChars: queryInteger(url, "max_chars"),
-              startLine: queryInteger(url, "start_line"),
-              numLines: queryInteger(url, "num_lines")
-            })
-          );
+          const fileRead = readProjectFile(project.root, {
+            projectId: project.id,
+            relativePath: url.searchParams.get("path") ?? "",
+            maxChars: queryInteger(url, "max_chars"),
+            startLine: queryInteger(url, "start_line"),
+            numLines: queryInteger(url, "num_lines")
+          });
+          recordHttpEvidence(root, project.id, {
+            kind: "file_read",
+            path: fileRead.path,
+            status: fileRead.read_status === "complete" ? "complete" : "partial",
+            metadata: {
+              read_status: fileRead.read_status,
+              bytes_returned: fileRead.bytes_returned,
+              truncated: fileRead.truncated,
+              line_count: fileRead.line_count,
+              line_count_estimate: fileRead.line_count_estimate,
+              line_range_returned: fileRead.line_range_returned,
+              coverage_warning: fileRead.coverage_warning,
+              redacted: fileRead.redacted,
+              size: fileRead.size
+            }
+          });
+          sendJson(response, 200, fileRead);
         } catch (error) {
+          if (error instanceof ProjectFileError) {
+            recordHttpEvidence(root, project.id, {
+              kind: "file_read",
+              path: url.searchParams.get("path") ?? "",
+              status: projectFileReadStatusFromError(error),
+              metadata: {
+                error_code: error.code,
+                status: error.status,
+                blocked: error.code === "blocked_sensitive_file" || error.code === "binary_file"
+              }
+            });
+          }
           sendProjectFileError(response, error);
         }
         return;
@@ -843,18 +912,26 @@ export async function startAgentBridgeServer(
           if (project.registered) {
             touchProject(root, project.id);
           }
-          sendJson(
-            response,
-            200,
-            searchProjectText(project.root, {
-              projectId: project.id,
-              query: url.searchParams.get("q") ?? "",
-              maxMatches: queryInteger(url, "max_matches"),
-              maxFileSize: queryInteger(url, "max_file_size"),
-              maxDepth: queryInteger(url, "max_depth"),
-              caseSensitive: queryBoolean(url, "case_sensitive")
-            })
-          );
+          const grep = searchProjectText(project.root, {
+            projectId: project.id,
+            query: url.searchParams.get("q") ?? "",
+            maxMatches: queryInteger(url, "max_matches"),
+            maxFileSize: queryInteger(url, "max_file_size"),
+            maxDepth: queryInteger(url, "max_depth"),
+            caseSensitive: queryBoolean(url, "case_sensitive")
+          });
+          recordHttpEvidence(root, project.id, {
+            kind: "grep_seen",
+            status: grep.truncated ? "partial" : "complete",
+            metadata: {
+              query: grep.query,
+              match_count: grep.matches.length,
+              files_matched_count: new Set(grep.matches.map((match) => match.path)).size,
+              truncated: grep.truncated,
+              redacted: grep.redacted
+            }
+          });
+          sendJson(response, 200, grep);
         } catch (error) {
           sendProjectFileError(response, error);
         }
@@ -902,6 +979,17 @@ export async function startAgentBridgeServer(
           }
           const snapshot = createProjectInspectorSnapshot(project.root, commonOptions);
           snapshot.project.root_hint = redactSecrets(projectRootHint(project.root));
+          recordHttpEvidence(root, project.id, {
+            kind: "inspect_seen",
+            status: snapshot.limits.truncated ? "partial" : "complete",
+            metadata: {
+              branch: snapshot.repo.branch,
+              clean: snapshot.repo.clean,
+              changed_count: snapshot.repo.changed_files.length,
+              pending_approvals: snapshot.safety.pending_approvals,
+              diff_truncated: snapshot.limits.diff_truncated
+            }
+          });
           sendJson(response, 200, snapshot);
           return;
         }
@@ -910,7 +998,18 @@ export async function startAgentBridgeServer(
           if (project.registered) {
             touchProject(root, project.id);
           }
-          sendJson(response, 200, createCodexChangesSummary(project.root, commonOptions));
+          const changes = createCodexChangesSummary(project.root, commonOptions);
+          recordHttpEvidence(root, project.id, {
+            kind: "codex_changes_seen",
+            status: changes.limits.truncated ? "partial" : "complete",
+            metadata: {
+              branch: changes.branch,
+              clean: changes.clean,
+              changed_count: changes.changed_files.length,
+              diff_truncated: changes.limits.diff_truncated
+            }
+          });
+          sendJson(response, 200, changes);
           return;
         }
 
@@ -919,6 +1018,16 @@ export async function startAgentBridgeServer(
         }
         const snapshot = createProjectInspectorSnapshot(project.root, commonOptions);
         snapshot.project.root_hint = redactSecrets(projectRootHint(project.root));
+        recordHttpEvidence(root, project.id, {
+          kind: "review_packet_seen",
+          status: snapshot.limits.truncated ? "partial" : "complete",
+          metadata: {
+            stale: snapshot.codex.review_packet_stale,
+            changed_count: snapshot.codex.changed_file_summary.length,
+            tests_stale: snapshot.tests.stale,
+            approvals_count: snapshot.safety.approvals.length
+          }
+        });
         sendJson(response, 200, {
           ok: true,
           project_id: snapshot.project.id,
