@@ -11,6 +11,8 @@
     "README.md",
     "DEMO.md",
     "docs",
+    "plugins",
+    ".agents",
     "scripts",
     "openapi.agentbridge.json",
     "openapi.agentbridge.gpt-actions.json",

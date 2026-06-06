@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="CodexLink">
+  <rect width="128" height="128" rx="24" fill="#111827"/>
+  <path d="M35 64c0-16 13-29 29-29h17" fill="none" stroke="#38bdf8" stroke-width="10" stroke-linecap="round"/>
+  <path d="M93 64c0 16-13 29-29 29H47" fill="none" stroke="#22c55e" stroke-width="10" stroke-linecap="round"/>
+  <path d="M49 49 34 64l15 15" fill="none" stroke="#e5e7eb" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m79 49 15 15-15 15" fill="none" stroke="#e5e7eb" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

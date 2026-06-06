@@ -1,0 +1,20 @@
+{
+  "name": "agentbridge-local",
+  "interface": {
+    "displayName": "AgentBridge Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "codexlink",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codexlink"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

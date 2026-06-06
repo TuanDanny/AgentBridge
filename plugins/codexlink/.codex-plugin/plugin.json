@@ -1,0 +1,34 @@
+{
+  "name": "codexlink",
+  "version": "0.7.0-alpha",
+  "description": "Auto-bootstrap CodexLink shared sessions between Codex and ChatGPT GPTs through AgentBridge.",
+  "author": {
+    "name": "AgentBridge"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "mcp",
+    "session",
+    "workspace-memory",
+    "handoff"
+  ],
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "CodexLink",
+    "shortDescription": "Auto-resume shared sessions for Codex and GPTs.",
+    "longDescription": "CodexLink connects Codex to AgentBridge shared session memory through MCP and a SessionStart hook.",
+    "developerName": "AgentBridge",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Resume this project through CodexLink shared session.",
+      "Summarize current goal, open handoffs, recent checks, and recommended next action."
+    ]
+  }
+}

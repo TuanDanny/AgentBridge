@@ -1,0 +1,13 @@
+{
+  "mcp_servers": {
+    "agentbridge": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/hooks/mcp_stdio.mjs"
+      ],
+      "env": {
+        "CODEXLINK_PLUGIN": "codexlink"
+      }
+    }
+  }
+}

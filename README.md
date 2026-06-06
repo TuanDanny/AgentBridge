@@ -146,6 +146,18 @@ CodexLink exposes these token-protected actions for GPTs:
 
 ---
 
+## Codex Plugin
+
+CodexLink v0.7-beta includes a local Codex plugin under `plugins/codexlink/`. After building, enable the repo marketplace in Codex, trust the `SessionStart` hook once, and the hook will run `session bootstrap` for the current project. Setup details are in `docs/guides/CODEXLINK_PLUGIN_SETUP.md`.
+
+Dry-run check:
+
+```powershell
+node plugins/codexlink/hooks/session_start.mjs --dry-run
+```
+
+---
+
 ## Safety model
 
 CodexLink is designed to be local-first and allowlist-based.
