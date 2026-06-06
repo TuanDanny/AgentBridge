@@ -100,7 +100,7 @@ const EVIDENCE_KINDS = new Set<SessionEvidenceKind>([
 ]);
 const EVIDENCE_SOURCES = new Set<SessionEvidenceSource>(["http", "cli", "mcp", "github", "script", "system"]);
 const EVIDENCE_STATUSES = new Set<SessionEvidenceStatus>(["seen", "complete", "partial", "truncated", "blocked", "error"]);
-const CHECK_TYPES = new Set<SessionCheckType>(["build", "test", "diff_check", "workflow", "smoke"]);
+const CHECK_TYPES = new Set<SessionCheckType>(["build", "test", "diff_check", "workflow", "git_status", "smoke"]);
 const CHECK_STATUSES = new Set<SessionCheckStatus>(["pass", "fail", "warning", "unknown", "skipped"]);
 
 export class SessionStoreError extends Error {

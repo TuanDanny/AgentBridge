@@ -327,6 +327,45 @@ function projectFileReadStatusFromError(error: ProjectFileError): "blocked" | "e
   return "error";
 }
 
+function truncatedEvidenceStatus(truncated: boolean): "complete" | "truncated" {
+  return truncated ? "truncated" : "complete";
+}
+
+function repoStatusCounts(statusShort: string): { staged_count: number; unstaged_count: number; untracked_count: number } {
+  return statusShort
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !line.startsWith("##"))
+    .reduce(
+      (counts, line) => {
+        const code = line.slice(0, 2);
+        if (code === "??") {
+          counts.untracked_count += 1;
+          return counts;
+        }
+        if (code[0] && code[0] !== " ") {
+          counts.staged_count += 1;
+        }
+        if (code[1] && code[1] !== " ") {
+          counts.unstaged_count += 1;
+        }
+        return counts;
+      },
+      { staged_count: 0, unstaged_count: 0, untracked_count: 0 }
+    );
+}
+
+function headMetadata(recentCommits: string[]): { head_short_sha?: string; head_message?: string } {
+  const head = recentCommits[0];
+  if (!head) {
+    return {};
+  }
+  const match = /^([0-9a-f]{6,40})\s+(.*)$/i.exec(head);
+  if (!match) {
+    return { head_message: head };
+  }
+  return { head_short_sha: match[1], head_message: match[2] };
+}
+
 function projectFileErrorCoverage(error: ProjectFileError): {
   read_status: "blocked" | "binary" | "not_found" | "error";
   blocked_reason?: string;
@@ -774,7 +813,7 @@ export async function startAgentBridgeServer(
           });
           recordHttpEvidence(root, project.id, {
             kind: "tree_seen",
-            status: tree.truncated ? "partial" : "complete",
+            status: truncatedEvidenceStatus(tree.truncated),
             metadata: {
               max_depth: tree.max_depth,
               max_entries: tree.max_entries,
@@ -782,6 +821,7 @@ export async function startAgentBridgeServer(
               total_files: tree.total_files,
               total_folders: tree.total_folders,
               truncated: tree.truncated,
+              tree_truncated: tree.inventory.tree_truncated,
               coverage_warning: tree.coverage_warning?.message ?? null,
               scale_hint: tree.inventory.scale_hint
             }
@@ -820,7 +860,7 @@ export async function startAgentBridgeServer(
           });
           recordHttpEvidence(root, project.id, {
             kind: "file_search",
-            status: search.truncated ? "partial" : "complete",
+            status: truncatedEvidenceStatus(search.truncated),
             metadata: {
               query: search.query,
               result_count: search.matches.length,
@@ -922,7 +962,7 @@ export async function startAgentBridgeServer(
           });
           recordHttpEvidence(root, project.id, {
             kind: "grep_seen",
-            status: grep.truncated ? "partial" : "complete",
+            status: truncatedEvidenceStatus(grep.truncated),
             metadata: {
               query: grep.query,
               match_count: grep.matches.length,
@@ -986,6 +1026,8 @@ export async function startAgentBridgeServer(
               branch: snapshot.repo.branch,
               clean: snapshot.repo.clean,
               changed_count: snapshot.repo.changed_files.length,
+              ...repoStatusCounts(snapshot.repo.status_short),
+              ...headMetadata(snapshot.repo.recent_commits),
               pending_approvals: snapshot.safety.pending_approvals,
               diff_truncated: snapshot.limits.diff_truncated
             }

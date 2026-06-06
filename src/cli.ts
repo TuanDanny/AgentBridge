@@ -69,6 +69,7 @@ import {
 import {
   addSessionHandoff,
   appendSessionCheck,
+  appendSessionEvidence,
   appendSessionEvent,
   bootstrapSession,
   formatSessionBootstrap,
@@ -92,6 +93,7 @@ import type {
   SessionCheckStatus,
   SessionCheckType,
   SessionCurrentStatus,
+  AppendSessionEvidenceInput,
   SessionEventType,
   SessionHandoffStatus,
   SessionPhase
@@ -277,6 +279,53 @@ function resolveCliSessionProject(id?: string): string {
   }
 
   throw new Error("No active project selected. Run agentbridge project select <id> or pass a project id.");
+}
+
+function recordCliEvidence(projectId: string, input: Omit<AppendSessionEvidenceInput, "actor" | "source">): void {
+  appendSessionEvidence(process.cwd(), projectId, {
+    ...input,
+    actor: "codex",
+    source: "cli"
+  });
+}
+
+function truncatedEvidenceStatus(truncated: boolean): "complete" | "truncated" {
+  return truncated ? "truncated" : "complete";
+}
+
+function repoStatusCounts(statusShort: string): { staged_count: number; unstaged_count: number; untracked_count: number } {
+  return statusShort
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !line.startsWith("##"))
+    .reduce(
+      (counts, line) => {
+        const code = line.slice(0, 2);
+        if (code === "??") {
+          counts.untracked_count += 1;
+          return counts;
+        }
+        if (code[0] && code[0] !== " ") {
+          counts.staged_count += 1;
+        }
+        if (code[1] && code[1] !== " ") {
+          counts.unstaged_count += 1;
+        }
+        return counts;
+      },
+      { staged_count: 0, unstaged_count: 0, untracked_count: 0 }
+    );
+}
+
+function headMetadata(recentCommits: string[]): { head_short_sha?: string; head_message?: string } {
+  const head = recentCommits[0];
+  if (!head) {
+    return {};
+  }
+  const match = /^([0-9a-f]{6,40})\s+(.*)$/i.exec(head);
+  if (!match) {
+    return { head_message: head };
+  }
+  return { head_short_sha: match[1], head_message: match[2] };
 }
 
 program
@@ -684,7 +733,7 @@ session
   .command("check")
   .description("Append shared session check metadata without running a command.")
   .argument("<projectId>", "safe project id")
-  .requiredOption("--type <type>", "build, test, diff_check, workflow, or smoke")
+  .requiredOption("--type <type>", "build, test, diff_check, workflow, git_status, or smoke")
   .requiredOption("--status <status>", "pass, fail, warning, unknown, or skipped")
   .requiredOption("--summary <summary>", "short check summary")
   .option("--actor <actor>", "actor recording the check", "codex")
@@ -1021,6 +1070,21 @@ project
         maxDepth: parseNonNegativeIntegerOption(options.maxDepth, "--max-depth"),
         maxEntries: parseNonNegativeIntegerOption(options.maxEntries, "--max-entries")
       });
+      recordCliEvidence(project.projectId, {
+        kind: "tree_seen",
+        status: truncatedEvidenceStatus(result.truncated),
+        metadata: {
+          max_depth: result.max_depth,
+          max_entries: result.max_entries,
+          returned_entries: result.returned_entries,
+          total_files: result.total_files,
+          total_folders: result.total_folders,
+          truncated: result.truncated,
+          tree_truncated: result.inventory.tree_truncated,
+          coverage_warning: result.coverage_warning?.message ?? null,
+          scale_hint: result.inventory.scale_hint
+        }
+      });
       console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectTree(result));
     } catch (error) {
       handleError(error);
@@ -1046,6 +1110,15 @@ project
         maxDepth: parseNonNegativeIntegerOption(options.maxDepth, "--max-depth"),
         caseSensitive: Boolean(options.caseSensitive)
       });
+      recordCliEvidence(project.projectId, {
+        kind: "file_search",
+        status: truncatedEvidenceStatus(result.truncated),
+        metadata: {
+          query: result.query,
+          result_count: result.matches.length,
+          truncated: result.truncated
+        }
+      });
       console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectFileSearch(result));
     } catch (error) {
       handleError(error);
@@ -1070,6 +1143,22 @@ project
         maxChars: parseNonNegativeIntegerOption(options.maxChars, "--max-chars"),
         ...(options.startLine ? { startLine: parseNonNegativeIntegerOption(options.startLine, "--start-line") } : {}),
         ...(options.numLines ? { numLines: parseNonNegativeIntegerOption(options.numLines, "--num-lines") } : {})
+      });
+      recordCliEvidence(project.projectId, {
+        kind: "file_read",
+        path: result.path,
+        status: result.read_status === "complete" ? "complete" : "partial",
+        metadata: {
+          read_status: result.read_status,
+          bytes_returned: result.bytes_returned,
+          truncated: result.truncated,
+          line_count: result.line_count,
+          line_count_estimate: result.line_count_estimate,
+          line_range_returned: result.line_range_returned,
+          coverage_warning: result.coverage_warning,
+          redacted: result.redacted,
+          size: result.size
+        }
       });
       console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectFileRead(result));
     } catch (error) {
@@ -1099,13 +1188,24 @@ project
           projectId: project.projectId,
           query,
           maxMatches: parseNonNegativeIntegerOption(options.maxMatches, "--max-matches"),
-          maxFileSize: parseNonNegativeIntegerOption(options.maxFileSize, "--max-file-size"),
-          maxDepth: parseNonNegativeIntegerOption(options.maxDepth, "--max-depth"),
-          caseSensitive: Boolean(options.caseSensitive)
-        });
-        console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectTextSearch(result));
-      } catch (error) {
-        handleError(error);
+        maxFileSize: parseNonNegativeIntegerOption(options.maxFileSize, "--max-file-size"),
+        maxDepth: parseNonNegativeIntegerOption(options.maxDepth, "--max-depth"),
+        caseSensitive: Boolean(options.caseSensitive)
+      });
+      recordCliEvidence(project.projectId, {
+        kind: "grep_seen",
+        status: truncatedEvidenceStatus(result.truncated),
+        metadata: {
+          query: result.query,
+          match_count: result.matches.length,
+          files_matched_count: new Set(result.matches.map((match) => match.path)).size,
+          truncated: result.truncated,
+          redacted: result.redacted
+        }
+      });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatProjectTextSearch(result));
+    } catch (error) {
+      handleError(error);
       }
     }
   );
@@ -1136,11 +1236,34 @@ project
       };
       if (options.changes) {
         const changes = createCodexChangesSummary(root, commonOptions);
+        recordCliEvidence(projectId, {
+          kind: "codex_changes_seen",
+          status: changes.limits.truncated ? "partial" : "complete",
+          metadata: {
+            branch: changes.branch,
+            clean: changes.clean,
+            changed_count: changes.changed_files.length,
+            diff_truncated: changes.limits.diff_truncated
+          }
+        });
         console.log(options.json ? JSON.stringify(changes, null, 2) : formatCodexChangesHuman(changes));
         return;
       }
 
       const snapshot = createProjectInspectorSnapshot(root, commonOptions);
+      recordCliEvidence(projectId, {
+        kind: "inspect_seen",
+        status: snapshot.limits.truncated ? "partial" : "complete",
+        metadata: {
+          branch: snapshot.repo.branch,
+          clean: snapshot.repo.clean,
+          changed_count: snapshot.repo.changed_files.length,
+          ...repoStatusCounts(snapshot.repo.status_short),
+          ...headMetadata(snapshot.repo.recent_commits),
+          pending_approvals: snapshot.safety.pending_approvals,
+          diff_truncated: snapshot.limits.diff_truncated
+        }
+      });
       console.log(options.json ? JSON.stringify(snapshot, null, 2) : formatInspectorHuman(snapshot));
     } catch (error) {
       handleError(error);

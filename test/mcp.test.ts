@@ -161,7 +161,8 @@ describe("MCP server", () => {
         "session_append_event",
         "session_add_handoff",
         "session_update_handoff",
-        "session_set_goal"
+        "session_set_goal",
+        "session_append_check"
       ])
     );
   });
@@ -342,6 +343,33 @@ describe("MCP server", () => {
       phase: "review",
       current_status: "in_progress"
     });
+
+    const check = firstJson<{ check: { type: string; status: string; summary: string; command?: string } }>(
+      await connected.client.callTool({
+        name: "session_append_check",
+        arguments: {
+          project_id: projectId,
+          type: "test",
+          status: "pass",
+          summary: "MCP test passed with OPENAI_API_KEY=sk-test_should_not_leak",
+          command: "npm test --token=abc_should_not_leak",
+          exit_code: 0,
+          duration_ms: 25
+        }
+      })
+    );
+    expect(check.check.summary).toContain("[REDACTED]");
+    expect(check.check.command).toContain("[REDACTED]");
+
+    const summaryWithCheck = firstJson<{ summary: { recent_checks: Array<{ type: string; status: string; summary: string }> } }>(
+      await connected.client.callTool({
+        name: "session_summary",
+        arguments: { project_id: projectId }
+      })
+    );
+    expect(summaryWithCheck.summary.recent_checks.at(-1)).toMatchObject({ type: "test", status: "pass" });
+    expect(JSON.stringify(summaryWithCheck)).not.toContain("sk-test_should_not_leak");
+    expect(JSON.stringify(summaryWithCheck)).not.toContain("abc_should_not_leak");
   });
 
   it("rejects invalid shared session MCP inputs", async () => {

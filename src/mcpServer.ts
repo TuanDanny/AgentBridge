@@ -10,6 +10,7 @@ import { classifyCommand, createApproval } from "./safety.js";
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
 import {
   addSessionHandoff,
+  appendSessionCheck,
   appendSessionEvent,
   bootstrapSession,
   getOrCreateActiveSession,
@@ -76,6 +77,8 @@ const sessionHandoffListStatusSchema = z.enum([
 ]);
 const sessionPhaseSchema = z.enum(["planning", "implementation", "review", "blocked", "done"]);
 const sessionCurrentStatusSchema = z.enum(["active", "in_progress", "blocked", "done"]);
+const sessionCheckTypeSchema = z.enum(["build", "test", "diff_check", "workflow", "git_status", "smoke"]);
+const sessionCheckStatusSchema = z.enum(["pass", "fail", "warning", "unknown", "skipped"]);
 const sessionBootstrapClientSchema = z.enum(["codex", "chatgpt", "user", "system"]);
 const sessionBootstrapAdapterSchema = z.enum(["mcp", "cli", "codex_plugin"]);
 const sessionBootstrapModeSchema = z.enum(["start", "resume"]);
@@ -394,6 +397,45 @@ export function createAgentBridgeMcpServer(rootInput = process.cwd()): McpServer
         goal,
         phase,
         status,
+        expected_revision
+      });
+      return textResult(JSON.stringify(result, null, 2), result);
+    }
+  );
+
+  server.registerTool(
+    "session_append_check",
+    {
+      title: "Append Shared Session Check",
+      description: "Append redacted build/test/workflow check metadata without running a command.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        actor: sessionActorSchema.default("codex"),
+        type: sessionCheckTypeSchema,
+        status: sessionCheckStatusSchema,
+        summary: z.string(),
+        command: z.string().optional(),
+        exit_code: z.number().int().min(0).optional(),
+        duration_ms: z.number().int().min(0).optional(),
+        expected_revision: z.number().int().min(0).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, actor, type, status, summary, command, exit_code, duration_ms, expected_revision }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = appendSessionCheck(root, projectId, {
+        actor,
+        type,
+        status,
+        summary,
+        command,
+        exit_code,
+        duration_ms,
         expected_revision
       });
       return textResult(JSON.stringify(result, null, 2), result);

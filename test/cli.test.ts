@@ -259,6 +259,29 @@ describe("compiled CLI smoke tests", () => {
     const redacted = JSON.parse(runCli(registryRoot, "project", "read-file", "CliGamma", "safe-secret.txt", "--json"));
     expect(redacted.content).toContain("Bearer [REDACTED]");
 
+    const evidence = JSON.parse(runCli(registryRoot, "session", "evidence", "CliGamma", "--json"));
+    expect(evidence.evidence.map((item: { kind: string }) => item.kind)).toEqual(
+      expect.arrayContaining(["tree_seen", "file_search", "file_read", "grep_seen"])
+    );
+    const grepEvidence = evidence.evidence.find((item: { kind: string }) => item.kind === "grep_seen");
+    expect(grepEvidence.metadata.query).toBe("[REDACTED]");
+    expect(grepEvidence.metadata).not.toHaveProperty("content");
+    expect(grepEvidence.metadata).not.toHaveProperty("snippet");
+    const cliSummary = JSON.parse(runCli(registryRoot, "session", "summary", "CliGamma", "--json"));
+    expect(cliSummary.summary.recent_evidence.length).toBeGreaterThanOrEqual(4);
+    const sessionEvidenceFile = path.join(
+      registryRoot,
+      ".agentbridge",
+      "sessions",
+      "CliGamma",
+      cliSummary.summary.session_id,
+      "evidence.jsonl"
+    );
+    const evidenceText = fs.readFileSync(sessionEvidenceFile, "utf8");
+    expect(evidenceText).not.toContain(token);
+    expect(evidenceText).not.toContain("CLI generated file.");
+    expect(evidenceText).not.toContain("Authorization: Bearer");
+
     const selected = JSON.parse(runCli(registryRoot, "project", "select", "CliGamma"));
     expect(selected.active_project.id).toBe("CliGamma");
     const eventFile = path.join(registryRoot, ".agentbridge", "active_project_events.jsonl");
@@ -399,12 +422,43 @@ describe("compiled CLI smoke tests", () => {
     expect(goal.summary.current_goal).toBe("Build shared workspace memory.");
     expect(goal.summary.phase).toBe("implementation");
 
+    const check = JSON.parse(
+      runCli(
+        registryRoot,
+        "session",
+        "check",
+        "AgentBridge",
+        "--type",
+        "test",
+        "--status",
+        "pass",
+        "--summary",
+        `npm test passed with token=${token}`,
+        "--command",
+        `npm test --token=${token}`,
+        "--exit-code",
+        "0",
+        "--duration-ms",
+        "42",
+        "--json"
+      )
+    );
+    expect(check.check.summary).toContain("[REDACTED]");
+    expect(check.check.command).toContain("[REDACTED]");
+    expect(JSON.stringify(check)).not.toContain(token);
+    const checks = JSON.parse(runCli(registryRoot, "session", "checks", "AgentBridge", "--json"));
+    expect(checks.checks.at(-1)).toMatchObject({ type: "test", status: "pass", exit_code: 0, duration_ms: 42 });
+
     const updates = JSON.parse(runCli(registryRoot, "session", "updates", "AgentBridge", "--since", "1", "--json"));
     expect(updates.events.length).toBeGreaterThan(0);
+    expect(updates.checks.some((item: { type: string; status: string }) => item.type === "test" && item.status === "pass")).toBe(true);
 
     const sessionDir = path.join(registryRoot, ".agentbridge", "sessions", "AgentBridge");
     expect(fs.existsSync(path.join(sessionDir, "active_session.json"))).toBe(true);
-    const stored = fs.readFileSync(path.join(sessionDir, active.session.session_id, "events.jsonl"), "utf8");
+    const stored = [
+      fs.readFileSync(path.join(sessionDir, active.session.session_id, "events.jsonl"), "utf8"),
+      fs.readFileSync(path.join(sessionDir, active.session.session_id, "checks.jsonl"), "utf8")
+    ].join("\n");
     expect(stored).not.toContain(token);
     expect(stored).not.toContain("Authorization: Bearer b");
   });

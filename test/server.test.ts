@@ -1060,6 +1060,15 @@ describe("local daemon", () => {
     expect(limitedGrep.status).toBe(200);
     expect(limitedGrep.body.matches).toHaveLength(1);
 
+    const inspect = await requestJson<{ repo: { branch: string; clean: boolean; changed_files: string[] } }>({
+      host: running.info.host,
+      port: running.info.port,
+      path: "/chatgpt/projects/GammaProject/inspect",
+      token: localToken
+    });
+    expect(inspect.status).toBe(200);
+    expect(inspect.body.repo).toHaveProperty("branch");
+
     const redactedRead = await requestJson<{ content: string; redacted: boolean }>({
       host: running.info.host,
       port: running.info.port,
@@ -1146,7 +1155,7 @@ describe("local daemon", () => {
     });
     expect(sessionUpdates.status).toBe(200);
     const evidenceKinds = sessionUpdates.body.evidence.map((item) => item.kind);
-    expect(evidenceKinds).toEqual(expect.arrayContaining(["tree_seen", "file_search", "file_read", "grep_seen"]));
+    expect(evidenceKinds).toEqual(expect.arrayContaining(["tree_seen", "file_search", "file_read", "grep_seen", "inspect_seen"]));
     expect(sessionUpdates.body.evidence.some((item) => item.kind === "file_read" && item.path === noteFile && item.status === "complete")).toBe(true);
     expect(sessionUpdates.body.evidence.some((item) => item.kind === "file_read" && item.path === largeFile && item.status === "partial")).toBe(true);
     expect(sessionUpdates.body.evidence.some((item) => item.kind === "file_read" && item.status === "blocked")).toBe(true);
@@ -1154,6 +1163,11 @@ describe("local daemon", () => {
     expect(grepEvidence?.metadata.query).toBe("[REDACTED]");
     expect(grepEvidence?.metadata).not.toHaveProperty("snippet");
     expect(grepEvidence?.metadata).not.toHaveProperty("content");
+    const inspectEvidence = sessionUpdates.body.evidence.find((item) => item.kind === "inspect_seen");
+    expect(inspectEvidence?.metadata).toHaveProperty("branch");
+    expect(inspectEvidence?.metadata).toHaveProperty("changed_count");
+    expect(inspectEvidence?.metadata).not.toHaveProperty("diff");
+    expect(inspectEvidence?.metadata).not.toHaveProperty("raw_diff");
 
     const evidenceFile = path.join(
       serverRoot,

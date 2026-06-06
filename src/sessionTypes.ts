@@ -35,7 +35,7 @@ export type SessionEvidenceKind =
   | "review_packet_seen";
 export type SessionEvidenceSource = "http" | "cli" | "mcp" | "github" | "script" | "system";
 export type SessionEvidenceStatus = "seen" | "complete" | "partial" | "truncated" | "blocked" | "error";
-export type SessionCheckType = "build" | "test" | "diff_check" | "workflow" | "smoke";
+export type SessionCheckType = "build" | "test" | "diff_check" | "workflow" | "git_status" | "smoke";
 export type SessionCheckStatus = "pass" | "fail" | "warning" | "unknown" | "skipped";
 export type SessionBootstrapClient = "codex" | "chatgpt" | "user" | "system";
 export type SessionBootstrapAdapter = "mcp" | "cli" | "codex_plugin";
