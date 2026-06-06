@@ -154,6 +154,7 @@ describe("MCP server", () => {
     expect(tools.tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
         "session_active",
+        "session_bootstrap",
         "session_summary",
         "session_updates",
         "session_list_handoffs",
@@ -163,6 +164,51 @@ describe("MCP server", () => {
         "session_set_goal"
       ])
     );
+  });
+
+  it("bootstraps shared sessions through MCP without duplicate start events", async () => {
+    const root = makeTempRoot();
+    const projectId = "AgentBridge";
+    const connected = await createConnectedClient(root);
+    servers.push(connected);
+
+    const first = firstJson<{
+      project_id: string;
+      session_id: string;
+      revision: number;
+      bootstrap_event_created: boolean;
+      recommended_next_action: string;
+      active_clients: Array<{ client: string; adapter: string; source: string; last_tool: string }>;
+      recent_events: Array<{ summary: string }>;
+    }>(
+      await connected.client.callTool({
+        name: "session_bootstrap",
+        arguments: { project_id: projectId, source: "codex_plugin" }
+      })
+    );
+    expect(first.project_id).toBe(projectId);
+    expect(first.bootstrap_event_created).toBe(true);
+    expect(first.revision).toBe(2);
+    expect(first.recommended_next_action).toBe("set_goal_or_ask_user");
+    expect(first.active_clients[0]).toMatchObject({
+      client: "codex",
+      adapter: "mcp",
+      source: "codex_plugin",
+      last_tool: "session_bootstrap"
+    });
+    expect(first.recent_events.at(-1)?.summary).toBe("Codex session started");
+
+    const second = firstJson<{ revision: number; bootstrap_event_created: boolean }>(
+      await connected.client.callTool({
+        name: "session_bootstrap",
+        arguments: { project_id: projectId, source: "codex_plugin" }
+      })
+    );
+    expect(second.bootstrap_event_created).toBe(false);
+    expect(second.revision).toBe(first.revision);
+
+    const summary = getSessionSummary(root, projectId);
+    expect(summary.recent_events.filter((event) => event.summary === "Codex session started")).toHaveLength(1);
   });
 
   it("reads and writes shared sessions through MCP using the same store as CLI and HTTP adapters", async () => {

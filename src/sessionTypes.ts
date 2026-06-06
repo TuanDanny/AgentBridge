@@ -37,6 +37,25 @@ export type SessionEvidenceSource = "http" | "cli" | "mcp" | "github" | "script"
 export type SessionEvidenceStatus = "seen" | "complete" | "partial" | "truncated" | "blocked" | "error";
 export type SessionCheckType = "build" | "test" | "diff_check" | "workflow" | "smoke";
 export type SessionCheckStatus = "pass" | "fail" | "warning" | "unknown" | "skipped";
+export type SessionBootstrapClient = "codex" | "chatgpt" | "user" | "system";
+export type SessionBootstrapAdapter = "mcp" | "cli" | "codex_plugin";
+export type SessionBootstrapMode = "start" | "resume";
+export type SessionRecommendedNextAction =
+  | "acknowledge_open_handoff"
+  | "review_blocker"
+  | "inspect_failed_check"
+  | "set_goal_or_ask_user"
+  | "continue_current_goal";
+
+export interface SharedSessionActiveClient {
+  client: SessionBootstrapClient;
+  adapter: SessionBootstrapAdapter;
+  source: string;
+  last_seen: string;
+  last_tool: "session_bootstrap";
+  status: "active";
+  last_bootstrap_revision: number;
+}
 
 export interface ActiveSessionFile {
   schema_version: 1;
@@ -79,6 +98,7 @@ export interface SharedSessionStateFile {
   next_steps: string[];
   do_not_do: string[];
   warnings: string[];
+  active_clients: SharedSessionActiveClient[];
   updated_at: string;
 }
 
@@ -158,6 +178,7 @@ export interface SharedSessionSummaryFile {
   open_handoffs: SharedSessionHandoff[];
   recent_evidence: SharedSessionEvidence[];
   recent_checks: SharedSessionCheck[];
+  active_clients: SharedSessionActiveClient[];
   next_steps: string[];
   do_not_do: string[];
   warnings: string[];
@@ -217,6 +238,34 @@ export interface AppendSessionCheckInput {
   summary: string;
   duration_ms?: number;
   expected_revision?: number;
+}
+
+export interface SessionBootstrapInput {
+  actor?: SessionActor;
+  client?: SessionBootstrapClient;
+  adapter?: SessionBootstrapAdapter;
+  source?: string;
+  mode?: SessionBootstrapMode;
+}
+
+export interface SessionBootstrapResult {
+  ok: true;
+  project_id: string;
+  session_id: string;
+  revision: number;
+  bootstrapped: true;
+  bootstrap_event_created: boolean;
+  current_goal: string;
+  phase: SessionPhase;
+  status: SessionCurrentStatus;
+  open_handoffs: SharedSessionHandoff[];
+  recent_events: SharedSessionEvent[];
+  recent_evidence: SharedSessionEvidence[];
+  recent_checks: SharedSessionCheck[];
+  active_clients: SharedSessionActiveClient[];
+  do_not_do: string[];
+  warnings: string[];
+  recommended_next_action: SessionRecommendedNextAction;
 }
 
 export interface SharedSessionView {

@@ -294,8 +294,27 @@ describe("compiled CLI smoke tests", () => {
     expect(active.ok).toBe(true);
     expect(active.summary.revision).toBe(1);
 
+    const bootstrapped = JSON.parse(runCli(registryRoot, "session", "bootstrap", "AgentBridge", "--source", "codex_plugin", "--json"));
+    expect(bootstrapped.ok).toBe(true);
+    expect(bootstrapped.project_id).toBe("AgentBridge");
+    expect(bootstrapped.bootstrap_event_created).toBe(true);
+    expect(bootstrapped.revision).toBe(2);
+    expect(bootstrapped.recommended_next_action).toBe("set_goal_or_ask_user");
+    expect(bootstrapped.active_clients[0]).toMatchObject({
+      client: "codex",
+      adapter: "cli",
+      source: "codex_plugin",
+      last_tool: "session_bootstrap"
+    });
+
+    const heartbeat = JSON.parse(runCli(registryRoot, "session", "bootstrap", "AgentBridge", "--source", "codex_plugin", "--json"));
+    expect(heartbeat.ok).toBe(true);
+    expect(heartbeat.bootstrap_event_created).toBe(false);
+    expect(heartbeat.revision).toBe(bootstrapped.revision);
+
     const summary = JSON.parse(runCli(registryRoot, "session", "summary", "AgentBridge", "--json"));
     expect(summary.summary.project_id).toBe("AgentBridge");
+    expect(summary.summary.active_clients).toHaveLength(1);
 
     const event = JSON.parse(
       runCli(
@@ -311,6 +330,8 @@ describe("compiled CLI smoke tests", () => {
         `Started with OPENAI_API_KEY=${token}`,
         "--details",
         `Authorization: Bearer ${"b".repeat(32)}`,
+        "--expected-revision",
+        String(bootstrapped.revision),
         "--json"
       )
     );

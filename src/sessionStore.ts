@@ -11,6 +11,11 @@ import {
   type AppendSessionEvidenceInput,
   type AddSessionHandoffInput,
   type AppendSessionEventInput,
+  type SessionBootstrapAdapter,
+  type SessionBootstrapClient,
+  type SessionBootstrapInput,
+  type SessionBootstrapMode,
+  type SessionBootstrapResult,
   type SessionActor,
   type SessionCheckStatus,
   type SessionCheckType,
@@ -21,8 +26,10 @@ import {
   type SessionEventType,
   type SessionHandoffStatus,
   type SessionPhase,
+  type SessionRecommendedNextAction,
   type SessionUpdatesResult,
   type SetSessionGoalInput,
+  type SharedSessionActiveClient,
   type SharedSessionCheck,
   type SharedSessionEvidence,
   type SharedSessionEvent,
@@ -45,12 +52,19 @@ const RECENT_EVENT_MAX = 10;
 const OPEN_HANDOFF_MAX = 10;
 const RECENT_EVIDENCE_MAX = 8;
 const RECENT_CHECK_MAX = 8;
+const ACTIVE_CLIENT_MAX = 10;
+const BOOTSTRAP_TTL_MS = 10 * 60 * 1000;
 const METADATA_STRING_MAX = 500;
 const METADATA_ARRAY_MAX = 20;
 const METADATA_KEY_MAX = 80;
 const METADATA_JSON_MAX = 4000;
+const SOURCE_MAX = 120;
+const DEFAULT_SESSION_GOAL = "Shared workspace session is ready.";
 
 const ACTORS = new Set<SessionActor>(["user", "chatgpt", "codex", "system"]);
+const BOOTSTRAP_CLIENTS = new Set<SessionBootstrapClient>(["codex", "chatgpt", "user", "system"]);
+const BOOTSTRAP_ADAPTERS = new Set<SessionBootstrapAdapter>(["mcp", "cli", "codex_plugin"]);
+const BOOTSTRAP_MODES = new Set<SessionBootstrapMode>(["start", "resume"]);
 const EVENT_TYPES = new Set<SessionEventType>([
   "note",
   "decision",
@@ -106,7 +120,11 @@ export function getOrCreateActiveSession(registryRoot: string, projectIdInput: s
   const active = readOrCreateActiveSession(registryRoot, projectId);
   const paths = sessionPaths(registryRoot, projectId, active.session_id);
   const session = readJsonIfExists<SharedSessionFile>(paths.session) ?? defaultSession(projectId, active.session_id, active.updated_at);
-  const state = readJsonIfExists<SharedSessionStateFile>(paths.state) ?? defaultState(projectId, active.session_id, active.updated_at);
+  const state = normalizeState(
+    projectId,
+    active.session_id,
+    readJsonIfExists<SharedSessionStateFile>(paths.state) ?? defaultState(projectId, active.session_id, active.updated_at)
+  );
 
   ensureSessionFiles(paths, active, session, state);
   const summary = rebuildSessionSummary(registryRoot, projectId);
@@ -120,6 +138,71 @@ export function getProjectSession(registryRoot: string, projectIdInput: string):
 export function getSessionSummary(registryRoot: string, projectIdInput: string): SharedSessionSummaryFile {
   const { summary } = getOrCreateActiveSession(registryRoot, projectIdInput);
   return summary;
+}
+
+export function bootstrapSession(
+  registryRoot: string,
+  projectIdInput: string,
+  input: SessionBootstrapInput = {}
+): SessionBootstrapResult {
+  const projectId = validateProjectId(projectIdInput);
+  const actor = validateActor(input.actor ?? "codex");
+  const client = validateBootstrapClient(input.client ?? "codex");
+  const adapter = validateBootstrapAdapter(input.adapter ?? "mcp");
+  const mode = validateBootstrapMode(input.mode ?? "start");
+  const sourceText = sanitizeSessionText(input.source ?? adapter, SOURCE_MAX);
+  const source = sourceText.text.trim() || adapter;
+  const bundle = readSessionBundle(registryRoot, projectId);
+  const now = new Date();
+  const existingClient = bundle.state.active_clients.find(
+    (item) => item.client === client && item.adapter === adapter && item.source === source
+  );
+  const lastSeen = existingClient ? Date.parse(existingClient.last_seen) : Number.NaN;
+  const recentlyBootstrapped = existingClient !== undefined && Number.isFinite(lastSeen) && now.getTime() - lastSeen < BOOTSTRAP_TTL_MS;
+
+  let state = bundle.state;
+  let bootstrapEventCreated = false;
+  if (!recentlyBootstrapped) {
+    const revision = state.revision + 1;
+    const event = createSystemEvent(
+      bundle.paths.events,
+      revision,
+      actor,
+      "note",
+      "Codex session started",
+      `Bootstrap mode=${mode}; client=${client}; adapter=${adapter}; source=${source}.`
+    );
+    appendJsonLine(bundle.paths.events, event);
+    state = updateStateForWrite(state, {
+      revision,
+      actor,
+      lastEventId: event.id,
+      warning:
+        sourceText.redacted || sourceText.truncated
+          ? "Some session bootstrap source metadata was redacted or truncated before storage."
+          : undefined
+    });
+    bootstrapEventCreated = true;
+  }
+
+  const heartbeatAt = new Date().toISOString();
+  state = {
+    ...state,
+    last_actor: actor,
+    active_clients: upsertActiveClient(state.active_clients, {
+      client,
+      adapter,
+      source,
+      last_seen: heartbeatAt,
+      last_tool: "session_bootstrap",
+      status: "active",
+      last_bootstrap_revision: state.revision
+    }),
+    updated_at: bootstrapEventCreated ? state.updated_at : heartbeatAt
+  };
+  writeStateSnapshots(bundle.paths, bundle.active, bundle.session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return sessionBootstrapResult(summary, bootstrapEventCreated);
 }
 
 export function appendSessionEvent(
@@ -481,6 +564,7 @@ export function rebuildSessionSummary(registryRoot: string, projectIdInput: stri
     open_handoffs: openHandoffs,
     recent_evidence: readJsonLines<SharedSessionEvidence>(bundle.paths.evidence).slice(-RECENT_EVIDENCE_MAX),
     recent_checks: readJsonLines<SharedSessionCheck>(bundle.paths.checks).slice(-RECENT_CHECK_MAX),
+    active_clients: bundle.state.active_clients,
     next_steps: bundle.state.next_steps,
     do_not_do: bundle.state.do_not_do,
     warnings: bundle.state.warnings,
@@ -504,12 +588,41 @@ export function formatSessionSummary(summary: SharedSessionSummaryFile): string 
       ? summary.open_handoffs.map((handoff) => `- ${handoff.id} [${handoff.status}] ${handoff.title}`)
       : ["- None"]),
     "",
+    "Active clients:",
+    ...(summary.active_clients.length
+      ? summary.active_clients.map((client) => `- ${client.client}/${client.adapter} via ${client.source}: ${client.last_seen}`)
+      : ["- None"]),
+    "",
     "Recent events:",
     ...(summary.recent_events.length
       ? summary.recent_events.map((event) => `- r${event.revision} ${event.actor}/${event.type}: ${event.summary}`)
       : ["- None"])
   ];
   return lines.join("\n");
+}
+
+export function formatSessionBootstrap(result: SessionBootstrapResult): string {
+  return [
+    "Session bootstrap:",
+    `Project: ${result.project_id}`,
+    `Session: ${result.session_id}`,
+    `Revision: ${result.revision}`,
+    `Bootstrap event created: ${result.bootstrap_event_created ? "yes" : "no"}`,
+    `Goal: ${result.current_goal}`,
+    `Phase: ${result.phase}`,
+    `Status: ${result.status}`,
+    `Recommended next action: ${result.recommended_next_action}`,
+    "",
+    "Open handoffs:",
+    ...(result.open_handoffs.length
+      ? result.open_handoffs.map((handoff) => `- ${handoff.id} [${handoff.status}] ${handoff.title}`)
+      : ["- None"]),
+    "",
+    "Recent events:",
+    ...(result.recent_events.length
+      ? result.recent_events.map((event) => `- r${event.revision} ${event.actor}/${event.type}: ${event.summary}`)
+      : ["- None"])
+  ].join("\n");
 }
 
 export function formatSessionUpdates(updates: SessionUpdatesResult): string {
@@ -583,11 +696,11 @@ function readSessionBundle(registryRoot: string, projectId: string, options: { c
     }
     const now = new Date().toISOString();
     const createdSession = session ?? defaultSession(projectId, active.session_id, now);
-    const createdState = state ?? defaultState(projectId, active.session_id, now);
+    const createdState = normalizeState(projectId, active.session_id, state ?? defaultState(projectId, active.session_id, now));
     ensureSessionFiles(paths, active, createdSession, createdState);
     return { paths, active, session: createdSession, state: createdState };
   }
-  return { paths, active, session, state };
+  return { paths, active, session, state: normalizeState(projectId, active.session_id, state) };
 }
 
 function readActiveSession(registryRoot: string, projectId: string): ActiveSessionFile {
@@ -721,7 +834,24 @@ function defaultState(projectId: string, sessionId: string, now: string): Shared
       "Do not create releases or modify tags from session state."
     ],
     warnings: [],
+    active_clients: [],
     updated_at: now
+  };
+}
+
+function normalizeState(projectId: string, sessionId: string, state: SharedSessionStateFile): SharedSessionStateFile {
+  const fallback = defaultState(projectId, sessionId, state.updated_at || new Date().toISOString());
+  return {
+    ...fallback,
+    ...state,
+    current: {
+      ...fallback.current,
+      ...(state.current ?? {})
+    },
+    next_steps: Array.isArray(state.next_steps) ? state.next_steps : [],
+    do_not_do: Array.isArray(state.do_not_do) ? state.do_not_do : fallback.do_not_do,
+    warnings: Array.isArray(state.warnings) ? state.warnings : [],
+    active_clients: normalizeActiveClients((state as SharedSessionStateFile & { active_clients?: unknown }).active_clients)
   };
 }
 
@@ -730,7 +860,95 @@ function readState(paths: SessionPathSet): SharedSessionStateFile {
   if (!state) {
     throw new SessionStoreError("session_not_found", "Shared session state was not found.", 404);
   }
-  return state;
+  return normalizeState(state.project_id, state.session_id, state);
+}
+
+function normalizeActiveClients(input: unknown): SharedSessionActiveClient[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const clients: SharedSessionActiveClient[] = [];
+  for (const item of input.slice(-ACTIVE_CLIENT_MAX)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const raw = item as Partial<SharedSessionActiveClient>;
+    if (!raw.client || !BOOTSTRAP_CLIENTS.has(raw.client)) {
+      continue;
+    }
+    if (!raw.adapter || !BOOTSTRAP_ADAPTERS.has(raw.adapter)) {
+      continue;
+    }
+    if (typeof raw.source !== "string" || !raw.source.trim()) {
+      continue;
+    }
+    const source = sanitizeSessionText(raw.source, SOURCE_MAX).text.trim();
+    const lastSeen = typeof raw.last_seen === "string" && !Number.isNaN(Date.parse(raw.last_seen)) ? raw.last_seen : new Date().toISOString();
+    const revision =
+      typeof raw.last_bootstrap_revision === "number" && Number.isInteger(raw.last_bootstrap_revision) && raw.last_bootstrap_revision >= 0
+        ? raw.last_bootstrap_revision
+        : 0;
+    clients.push({
+      client: raw.client,
+      adapter: raw.adapter,
+      source,
+      last_seen: lastSeen,
+      last_tool: "session_bootstrap",
+      status: "active",
+      last_bootstrap_revision: revision
+    });
+  }
+  return clients;
+}
+
+function upsertActiveClient(
+  activeClients: SharedSessionActiveClient[],
+  nextClient: SharedSessionActiveClient
+): SharedSessionActiveClient[] {
+  const clients = activeClients.filter(
+    (item) =>
+      !(item.client === nextClient.client && item.adapter === nextClient.adapter && item.source === nextClient.source)
+  );
+  clients.push(nextClient);
+  return clients.slice(-ACTIVE_CLIENT_MAX);
+}
+
+function sessionBootstrapResult(summary: SharedSessionSummaryFile, bootstrapEventCreated: boolean): SessionBootstrapResult {
+  return {
+    ok: true,
+    project_id: summary.project_id,
+    session_id: summary.session_id,
+    revision: summary.revision,
+    bootstrapped: true,
+    bootstrap_event_created: bootstrapEventCreated,
+    current_goal: summary.current_goal,
+    phase: summary.phase,
+    status: summary.current_status,
+    open_handoffs: summary.open_handoffs,
+    recent_events: summary.recent_events,
+    recent_evidence: summary.recent_evidence,
+    recent_checks: summary.recent_checks,
+    active_clients: summary.active_clients,
+    do_not_do: summary.do_not_do,
+    warnings: summary.warnings,
+    recommended_next_action: recommendedNextAction(summary)
+  };
+}
+
+function recommendedNextAction(summary: SharedSessionSummaryFile): SessionRecommendedNextAction {
+  if (summary.open_handoffs.some((handoff) => handoff.to === "codex" && handoff.status === "open")) {
+    return "acknowledge_open_handoff";
+  }
+  if (summary.current_status === "blocked" || summary.phase === "blocked") {
+    return "review_blocker";
+  }
+  if (summary.recent_checks.some((check) => check.status === "fail")) {
+    return "inspect_failed_check";
+  }
+  if (!summary.current_goal.trim() || summary.current_goal.trim() === DEFAULT_SESSION_GOAL) {
+    return "set_goal_or_ask_user";
+  }
+  return "continue_current_goal";
 }
 
 function createSystemEvent(
@@ -852,6 +1070,27 @@ function validateActor(value: string): SessionActor {
     throw new SessionStoreError("invalid_actor", "Session actor must be user, chatgpt, codex, or system.");
   }
   return value as SessionActor;
+}
+
+function validateBootstrapClient(value: string): SessionBootstrapClient {
+  if (!BOOTSTRAP_CLIENTS.has(value as SessionBootstrapClient)) {
+    throw new SessionStoreError("invalid_bootstrap_client", "Session bootstrap client must be codex, chatgpt, user, or system.");
+  }
+  return value as SessionBootstrapClient;
+}
+
+function validateBootstrapAdapter(value: string): SessionBootstrapAdapter {
+  if (!BOOTSTRAP_ADAPTERS.has(value as SessionBootstrapAdapter)) {
+    throw new SessionStoreError("invalid_bootstrap_adapter", "Session bootstrap adapter must be mcp, cli, or codex_plugin.");
+  }
+  return value as SessionBootstrapAdapter;
+}
+
+function validateBootstrapMode(value: string): SessionBootstrapMode {
+  if (!BOOTSTRAP_MODES.has(value as SessionBootstrapMode)) {
+    throw new SessionStoreError("invalid_bootstrap_mode", "Session bootstrap mode must be start or resume.");
+  }
+  return value as SessionBootstrapMode;
 }
 
 function validateEventType(value: string): SessionEventType {

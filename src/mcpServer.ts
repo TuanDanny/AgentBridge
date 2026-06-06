@@ -11,6 +11,7 @@ import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "
 import {
   addSessionHandoff,
   appendSessionEvent,
+  bootstrapSession,
   getOrCreateActiveSession,
   getSessionSummary,
   getSessionUpdates,
@@ -75,6 +76,9 @@ const sessionHandoffListStatusSchema = z.enum([
 ]);
 const sessionPhaseSchema = z.enum(["planning", "implementation", "review", "blocked", "done"]);
 const sessionCurrentStatusSchema = z.enum(["active", "in_progress", "blocked", "done"]);
+const sessionBootstrapClientSchema = z.enum(["codex", "chatgpt", "user", "system"]);
+const sessionBootstrapAdapterSchema = z.enum(["mcp", "cli", "codex_plugin"]);
+const sessionBootstrapModeSchema = z.enum(["start", "resume"]);
 const activeHandoffStatuses = new Set<SessionHandoffStatus>(["open", "acknowledged", "in_progress", "blocked"]);
 
 function sessionProjectId(root: string, projectId?: string): string {
@@ -129,6 +133,39 @@ export function createAgentBridgeMcpServer(rootInput = process.cwd()): McpServer
       }
     },
     async () => textResult(JSON.stringify(readSessionSummary(root), null, 2), readSessionSummary(root))
+  );
+
+  server.registerTool(
+    "session_bootstrap",
+    {
+      title: "Bootstrap Shared Session",
+      description: "Create or resume a shared session, update CodexLink heartbeat, and return compact next-action context.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        actor: sessionActorSchema.default("codex"),
+        client: sessionBootstrapClientSchema.default("codex"),
+        adapter: sessionBootstrapAdapterSchema.default("mcp"),
+        source: z.string().optional(),
+        mode: sessionBootstrapModeSchema.default("start")
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, actor, client, adapter, source, mode }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = bootstrapSession(root, projectId, {
+        actor,
+        client,
+        adapter,
+        source: source ?? "mcp",
+        mode
+      });
+      return textResult(JSON.stringify(result, null, 2), { ...result });
+    }
   );
 
   server.registerTool(

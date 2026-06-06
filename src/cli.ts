@@ -70,6 +70,8 @@ import {
   addSessionHandoff,
   appendSessionCheck,
   appendSessionEvent,
+  bootstrapSession,
+  formatSessionBootstrap,
   formatSessionHandoffs,
   formatSessionSummary,
   formatSessionUpdates,
@@ -84,6 +86,9 @@ import {
 } from "./sessionStore.js";
 import type {
   SessionActor,
+  SessionBootstrapAdapter,
+  SessionBootstrapClient,
+  SessionBootstrapMode,
   SessionCheckStatus,
   SessionCheckType,
   SessionCurrentStatus,
@@ -530,6 +535,44 @@ approvals
   });
 
 const session = program.command("session").description("Manage shared CodexLink workspace sessions.");
+
+session
+  .command("bootstrap")
+  .description("Bootstrap or resume a shared session for a CodexLink client.")
+  .argument("<projectId>", "safe project id")
+  .option("--actor <actor>", "user, chatgpt, codex, or system", "codex")
+  .option("--client <client>", "codex, chatgpt, user, or system", "codex")
+  .option("--adapter <adapter>", "mcp, cli, or codex_plugin", "cli")
+  .option("--source <source>", "bootstrap source label", "cli")
+  .option("--mode <mode>", "start or resume", "start")
+  .option("--json", "print JSON bootstrap result")
+  .action(
+    (
+      projectId: string,
+      options: {
+        actor: string;
+        client: string;
+        adapter: string;
+        source: string;
+        mode: string;
+        json?: boolean;
+      }
+    ) => {
+      try {
+        const resolvedProjectId = resolveCliSessionProject(projectId);
+        const result = bootstrapSession(process.cwd(), resolvedProjectId, {
+          actor: options.actor as SessionActor,
+          client: options.client as SessionBootstrapClient,
+          adapter: options.adapter as SessionBootstrapAdapter,
+          source: options.source,
+          mode: options.mode as SessionBootstrapMode
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionBootstrap(result));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
 
 session
   .command("active")

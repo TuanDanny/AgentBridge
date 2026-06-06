@@ -8,6 +8,7 @@ import {
   appendSessionEvidence,
   addSessionHandoff,
   appendSessionEvent,
+  bootstrapSession,
   getRecentChecks,
   getRecentEvidence,
   getOrCreateActiveSession,
@@ -32,6 +33,94 @@ afterEach(() => {
 });
 
 describe("shared session store", () => {
+  it("bootstraps missing sessions, returns compact context, and avoids event spam within TTL", () => {
+    const root = makeTempRoot();
+    const projectId = "AgentAI";
+    const token = `sk-${"e".repeat(32)}`;
+
+    const first = bootstrapSession(root, projectId, {
+      actor: "codex",
+      client: "codex",
+      adapter: "mcp",
+      source: `codex_plugin token=${token}`,
+      mode: "start"
+    });
+    expect(first).toMatchObject({
+      ok: true,
+      project_id: projectId,
+      revision: 2,
+      bootstrapped: true,
+      bootstrap_event_created: true,
+      current_goal: "Shared workspace session is ready.",
+      phase: "planning",
+      status: "active",
+      recommended_next_action: "set_goal_or_ask_user"
+    });
+    expect(first.open_handoffs).toEqual([]);
+    expect(first.recent_evidence).toEqual([]);
+    expect(first.recent_checks).toEqual([]);
+    expect(first.active_clients).toHaveLength(1);
+    expect(first.active_clients[0]).toMatchObject({
+      client: "codex",
+      adapter: "mcp",
+      last_tool: "session_bootstrap",
+      status: "active",
+      last_bootstrap_revision: 2
+    });
+    expect(first.recent_events.at(-1)?.summary).toBe("Codex session started");
+    expect(JSON.stringify(first)).not.toContain(token);
+
+    const second = bootstrapSession(root, projectId, {
+      actor: "codex",
+      client: "codex",
+      adapter: "mcp",
+      source: `codex_plugin token=${token}`,
+      mode: "start"
+    });
+    expect(second.revision).toBe(first.revision);
+    expect(second.bootstrap_event_created).toBe(false);
+    expect(second.active_clients).toHaveLength(1);
+    expect(second.active_clients[0].last_bootstrap_revision).toBe(first.revision);
+
+    const summary = getSessionSummary(root, projectId);
+    expect(summary.revision).toBe(2);
+    expect(summary.active_clients).toHaveLength(1);
+    expect(summary.recent_events.filter((event) => event.summary === "Codex session started")).toHaveLength(1);
+
+    const sessionDir = path.join(root, ".agentbridge", "sessions", projectId, summary.session_id);
+    const serialized = [
+      fs.readFileSync(path.join(sessionDir, "events.jsonl"), "utf8"),
+      fs.readFileSync(path.join(sessionDir, "state.json"), "utf8"),
+      fs.readFileSync(path.join(sessionDir, "summary.json"), "utf8")
+    ].join("\n");
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain("token=");
+    expect(serialized).not.toContain("OPENAI_API_KEY=");
+  });
+
+  it("recommends acknowledging open Codex handoffs during bootstrap", () => {
+    const root = makeTempRoot();
+    const projectId = "AgentAI";
+    addSessionHandoff(root, projectId, {
+      from: "chatgpt",
+      to: "codex",
+      title: "Review handoff",
+      message: "Please continue from the shared session."
+    });
+
+    const result = bootstrapSession(root, projectId, {
+      actor: "codex",
+      client: "codex",
+      adapter: "cli",
+      source: "cli"
+    });
+
+    expect(result.bootstrap_event_created).toBe(true);
+    expect(result.open_handoffs).toHaveLength(1);
+    expect(result.open_handoffs[0]).toMatchObject({ to: "codex", status: "open" });
+    expect(result.recommended_next_action).toBe("acknowledge_open_handoff");
+  });
+
   it("creates sessions, appends events and handoffs, updates summaries, and redacts secrets", () => {
     const root = makeTempRoot();
     const projectId = "AgentBridge";
