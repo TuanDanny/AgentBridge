@@ -150,6 +150,16 @@ CodexLink exposes these token-protected actions for GPTs:
 
 CodexLink v0.7-beta includes a local Codex plugin under `plugins/codexlink/`. After building, enable the repo marketplace in Codex, trust the `SessionStart` hook once, and the hook will run `session bootstrap` for the current project. Setup details are in `docs/guides/CODEXLINK_PLUGIN_SETUP.md`.
 
+v0.7-delta adds setup and diagnostics:
+
+```powershell
+node dist\cli.js setup codex-plugin --dry-run
+node dist\cli.js setup gpt-actions
+node dist\cli.js doctor
+```
+
+Doctor reports whether a problem is in the plugin, MCP config, hook trust, local server, tunnel, GPT Actions schema, or shared session. Troubleshooting details are in `docs/guides/CODEXLINK_SETUP_DOCTOR.md`.
+
 Dry-run check:
 
 ```powershell

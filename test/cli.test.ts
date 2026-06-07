@@ -463,6 +463,28 @@ describe("compiled CLI smoke tests", () => {
     expect(stored).not.toContain("Authorization: Bearer b");
   });
 
+  it("supports CodexLink setup dry-run and doctor JSON without printing secrets", () => {
+    const setup = JSON.parse(runCli(process.cwd(), "setup", "codex-plugin", "--dry-run", "--json"));
+    expect(setup.ok).toBe(true);
+    expect(setup.dry_run).toBe(true);
+    expect(setup.checks.some((item: { name: string; status: string }) => item.name === "plugin_json" && item.status === "PASS")).toBe(true);
+    const setupText = JSON.stringify(setup);
+    expect(setupText).not.toContain(".agentbridge/local_token");
+    expect(setupText).not.toContain("Bearer ");
+    expect(setupText).not.toContain("OPENAI_API_KEY");
+    expect(setupText).not.toContain("sk-");
+
+    const doctorOutput = runCli(process.cwd(), "doctor", "--project", "AgentBridge", "--json");
+    const doctor = JSON.parse(doctorOutput);
+    expect(doctor.checks.some((item: { name: string; status: string }) => item.name === "hook_dry_run" && item.status === "PASS")).toBe(true);
+    expect(doctor.checks.some((item: { name: string; status: string }) => item.name === "runtime_git_status" && item.status === "PASS")).toBe(true);
+    expect(doctorOutput).not.toContain(".agentbridge/local_token");
+    expect(doctorOutput).not.toContain("local_token");
+    expect(doctorOutput).not.toContain("Bearer ");
+    expect(doctorOutput).not.toContain("OPENAI_API_KEY");
+    expect(doctorOutput).not.toContain("sk-");
+  });
+
   it("keeps active project event logs local-only", () => {
     const ignored = run(process.cwd(), "git", ["check-ignore", "-v", ".agentbridge/active_project_events.jsonl"]);
     expect(ignored).toContain(".agentbridge/");

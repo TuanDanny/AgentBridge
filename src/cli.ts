@@ -59,6 +59,7 @@ import {
   searchProjectText
 } from "./projectFiles.js";
 import { clearActiveProject, readActiveProject, selectActiveProject } from "./activeProject.js";
+import { formatDoctorText, formatSetupText, runDoctor, setupCodexPlugin, setupGptActions } from "./setupDoctor.js";
 import {
   createCodexChangesSummary,
   createProjectInspectPacket,
@@ -1324,6 +1325,56 @@ projects
   .action((id: string) => {
     try {
       console.log(JSON.stringify({ removed: removeProject(process.cwd(), id), registry: registryPath(process.cwd()) }, null, 2));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+const setup = program.command("setup").description("Run CodexLink one-time setup helpers.");
+
+setup
+  .command("codex-plugin")
+  .description("Validate CodexLink local plugin files and print enable/trust next steps.")
+  .option("--dry-run", "validate without writing files")
+  .option("--json", "print JSON result")
+  .action((options: { dryRun?: boolean; json?: boolean }) => {
+    try {
+      const result = setupCodexPlugin(process.cwd(), { dryRun: Boolean(options.dryRun) });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatSetupText("CodexLink Codex Plugin Setup", result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+setup
+  .command("gpt-actions")
+  .description("Regenerate GPT Actions schema assets and print safe setup next steps.")
+  .option("--dry-run", "validate without writing files")
+  .option("--host <host>", "local server host", "127.0.0.1")
+  .option("--port <port>", "local server port", "7777")
+  .option("--json", "print JSON result")
+  .action((options: { dryRun?: boolean; host: string; port: string; json?: boolean }) => {
+    try {
+      const port = Number.parseInt(options.port, 10);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error("Port must be an integer from 1 to 65535.");
+      }
+      const result = setupGptActions(process.cwd(), { dryRun: Boolean(options.dryRun), host: options.host, port });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatSetupText("CodexLink GPT Actions Setup", result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+program
+  .command("doctor")
+  .description("Diagnose CodexLink plugin, MCP, GPT Actions, tunnel, session, and security setup.")
+  .option("--project <projectId>", "project id to bootstrap/check")
+  .option("--json", "print JSON result")
+  .action(async (options: { project?: string; json?: boolean }) => {
+    try {
+      const result = await runDoctor(process.cwd(), { projectId: options.project });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatDoctorText(result));
     } catch (error) {
       handleError(error);
     }
