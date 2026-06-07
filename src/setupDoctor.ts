@@ -401,6 +401,9 @@ export function setupGptActions(rootInput = process.cwd(), options: SetupOptions
   const root = resolveProjectRoot(rootInput);
   const checks: DoctorCheck[] = [];
   const changedFiles: string[] = [];
+  const localHost = options.host ?? "127.0.0.1";
+  const localPort = options.port ?? 7777;
+  const localUrl = `http://${localHost}:${localPort}`;
   const generator = path.join(root, "scripts", "generate-openapi.mjs");
   if (!pathExists(generator)) {
     checks.push(fail("openapi_generator", "scripts/generate-openapi.mjs is missing.", "Restore the OpenAPI generator."));
@@ -432,7 +435,7 @@ export function setupGptActions(rootInput = process.cwd(), options: SetupOptions
     ensureDir(bridgeDir);
     const schema = fs.readFileSync(schemaSource, "utf8").replace(/https:\/\/YOUR-TUNNEL-URL\.example/g, publicUrl);
     writeText(liveSchema, schema);
-    writeText(setupGuide, gptActionsGuide(publicUrl, liveSchema));
+    writeText(setupGuide, gptActionsGuide(publicUrl, liveSchema, localUrl));
     changedFiles.push(".agentbridge/openapi-gpt-actions-live.json", ".agentbridge/GPT_ACTION_SETUP.txt");
   }
 
@@ -450,7 +453,7 @@ export function setupGptActions(rootInput = process.cwd(), options: SetupOptions
     checks,
     changed_files: changedFiles,
     next_steps: [
-      "Start AgentBridge local server.",
+      `Start AgentBridge local server at ${localUrl}.`,
       "Start or refresh HTTPS tunnel.",
       "Import .agentbridge/openapi-gpt-actions-live.json into GPT Actions.",
       "Configure Bearer auth without pasting the token into chat.",
@@ -459,10 +462,11 @@ export function setupGptActions(rootInput = process.cwd(), options: SetupOptions
   };
 }
 
-function gptActionsGuide(publicUrl: string, liveSchema: string): string {
+function gptActionsGuide(publicUrl: string, liveSchema: string, localUrl: string): string {
   return [
     "CodexLink GPT Actions setup",
     "",
+    `Local server: ${localUrl}`,
     `Tunnel URL: ${publicUrl}`,
     `Schema file: ${liveSchema}`,
     "",

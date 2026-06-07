@@ -13,7 +13,9 @@ import {
   appendSessionCheck,
   appendSessionEvent,
   bootstrapSession,
+  getActivitySinceRevision,
   getOrCreateActiveSession,
+  getRecentActivity,
   getSessionSummary,
   getSessionUpdates,
   listSessionHandoffs,
@@ -79,6 +81,43 @@ const sessionPhaseSchema = z.enum(["planning", "implementation", "review", "bloc
 const sessionCurrentStatusSchema = z.enum(["active", "in_progress", "blocked", "done"]);
 const sessionCheckTypeSchema = z.enum(["build", "test", "diff_check", "workflow", "git_status", "smoke"]);
 const sessionCheckStatusSchema = z.enum(["pass", "fail", "warning", "unknown", "skipped"]);
+const sessionActivityKindSchema = z.enum([
+  "session_bootstrap",
+  "session_resume",
+  "session_summary_read",
+  "active_client_heartbeat",
+  "handoff_seen",
+  "handoff_added",
+  "handoff_update",
+  "handoff_acknowledged",
+  "handoff_done",
+  "file_create",
+  "file_edit",
+  "file_delete",
+  "file_verify",
+  "file_status",
+  "file_diff_summary",
+  "command_started",
+  "command_finished",
+  "check_logged",
+  "test_passed",
+  "test_failed",
+  "build_passed",
+  "build_failed",
+  "tree_seen",
+  "file_read_seen",
+  "grep_seen",
+  "inspect_seen",
+  "evidence_recorded",
+  "workspace_snapshot",
+  "git_status_seen",
+  "changed_files_summary",
+  "activity_gap_detected",
+  "secret_redacted",
+  "raw_content_blocked",
+  "content_truncated",
+  "unsafe_path_blocked"
+]);
 const sessionBootstrapClientSchema = z.enum(["codex", "chatgpt", "user", "system"]);
 const sessionBootstrapAdapterSchema = z.enum(["mcp", "cli", "codex_plugin"]);
 const sessionBootstrapModeSchema = z.enum(["start", "resume"]);
@@ -243,6 +282,36 @@ export function createAgentBridgeMcpServer(rootInput = process.cwd()): McpServer
       const projectId = sessionProjectId(root, project_id);
       const updates = getSessionUpdates(root, projectId, since_revision);
       return textResult(JSON.stringify(updates, null, 2), { ...updates });
+    }
+  );
+
+  server.registerTool(
+    "session_activity",
+    {
+      title: "Get Shared Session Activity",
+      description: "Return recent redacted Activity Trace timeline metadata for a shared session.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        limit: z.number().int().min(1).max(50).default(20),
+        kind: sessionActivityKindSchema.optional(),
+        since_revision: z.number().int().min(0).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, limit, kind, since_revision }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result =
+        since_revision !== undefined
+          ? getActivitySinceRevision(root, projectId, since_revision)
+          : getRecentActivity(root, projectId, limit);
+      const activities = (result.activities ?? []).filter((activity) => (kind ? activity.kind === kind : true));
+      const structured = { ...result, activities };
+      return textResult(JSON.stringify(structured, null, 2), structured);
     }
   );
 

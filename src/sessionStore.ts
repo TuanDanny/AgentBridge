@@ -7,6 +7,7 @@ import { sanitizeSessionText, sanitizeSessionTextArray } from "./sessionRedactio
 import {
   SESSION_SCHEMA_VERSION,
   type ActiveSessionFile,
+  type AppendSessionActivityInput,
   type AppendSessionCheckInput,
   type AppendSessionEvidenceInput,
   type AddSessionHandoffInput,
@@ -17,6 +18,9 @@ import {
   type SessionBootstrapMode,
   type SessionBootstrapResult,
   type SessionActor,
+  type SessionActivityKind,
+  type SessionActivitySource,
+  type SessionActivityStatus,
   type SessionCheckStatus,
   type SessionCheckType,
   type SessionCurrentStatus,
@@ -29,6 +33,7 @@ import {
   type SessionRecommendedNextAction,
   type SessionUpdatesResult,
   type SetSessionGoalInput,
+  type SharedSessionActivity,
   type SharedSessionActiveClient,
   type SharedSessionCheck,
   type SharedSessionEvidence,
@@ -52,6 +57,7 @@ const RECENT_EVENT_MAX = 10;
 const OPEN_HANDOFF_MAX = 10;
 const RECENT_EVIDENCE_MAX = 8;
 const RECENT_CHECK_MAX = 8;
+const RECENT_ACTIVITY_MAX = 10;
 const ACTIVE_CLIENT_MAX = 10;
 const BOOTSTRAP_TTL_MS = 10 * 60 * 1000;
 const METADATA_STRING_MAX = 500;
@@ -102,6 +108,55 @@ const EVIDENCE_SOURCES = new Set<SessionEvidenceSource>(["http", "cli", "mcp", "
 const EVIDENCE_STATUSES = new Set<SessionEvidenceStatus>(["seen", "complete", "partial", "truncated", "blocked", "error"]);
 const CHECK_TYPES = new Set<SessionCheckType>(["build", "test", "diff_check", "workflow", "git_status", "smoke"]);
 const CHECK_STATUSES = new Set<SessionCheckStatus>(["pass", "fail", "warning", "unknown", "skipped"]);
+const ACTIVITY_STATUSES = new Set<SessionActivityStatus>(["success", "fail", "warning", "skipped", "unknown"]);
+const ACTIVITY_SOURCES = new Set<SessionActivitySource>([
+  "mcp",
+  "cli",
+  "http",
+  "gpt_actions",
+  "codex_plugin",
+  "doctor",
+  "smoke",
+  "script",
+  "system"
+]);
+const ACTIVITY_KINDS = new Set<SessionActivityKind>([
+  "session_bootstrap",
+  "session_resume",
+  "session_summary_read",
+  "active_client_heartbeat",
+  "handoff_seen",
+  "handoff_added",
+  "handoff_update",
+  "handoff_acknowledged",
+  "handoff_done",
+  "file_create",
+  "file_edit",
+  "file_delete",
+  "file_verify",
+  "file_status",
+  "file_diff_summary",
+  "command_started",
+  "command_finished",
+  "check_logged",
+  "test_passed",
+  "test_failed",
+  "build_passed",
+  "build_failed",
+  "tree_seen",
+  "file_read_seen",
+  "grep_seen",
+  "inspect_seen",
+  "evidence_recorded",
+  "workspace_snapshot",
+  "git_status_seen",
+  "changed_files_summary",
+  "activity_gap_detected",
+  "secret_redacted",
+  "raw_content_blocked",
+  "content_truncated",
+  "unsafe_path_blocked"
+]);
 
 export class SessionStoreError extends Error {
   code: string;
@@ -497,6 +552,71 @@ export function appendSessionCheck(
   return { ok: true, check, summary, revision };
 }
 
+export function appendSessionActivity(
+  registryRoot: string,
+  projectIdInput: string,
+  input: AppendSessionActivityInput
+): { ok: true; activity: SharedSessionActivity; summary: SharedSessionSummaryFile; revision: number } {
+  const projectId = validateProjectId(projectIdInput);
+  const actor = validateActor(input.actor ?? "codex");
+  const source = validateActivitySource(input.source);
+  const kind = validateActivityKind(input.kind);
+  const status = validateActivityStatus(input.status ?? "success");
+  const summaryText = sanitizeSessionText(input.summary, SUMMARY_MAX);
+  if (!summaryText.text.trim()) {
+    throw new SessionStoreError("invalid_session_activity", "Session activity summary is required.");
+  }
+  const taskId = input.task_id ? sanitizeSessionText(input.task_id, METADATA_STRING_MAX) : undefined;
+  const correlationId = input.correlation_id ? sanitizeSessionText(input.correlation_id, METADATA_STRING_MAX) : undefined;
+  const paths = sanitizeSessionTextArray(input.paths ?? [], ARRAY_MAX, METADATA_STRING_MAX);
+  const metadata = sanitizeSessionMetadata(input.metadata ?? {});
+  const related = sanitizeActivityRelated(input.related);
+
+  const bundle = readSessionBundle(registryRoot, projectId);
+  assertExpectedRevision(bundle.state.revision, input.expected_revision);
+  const activityItems = readJsonLines<SharedSessionActivity>(bundle.paths.activity);
+  const revision = bundle.state.revision + 1;
+  const revisionBefore = validateOptionalRevision(input.revision_before, "revision_before") ?? bundle.state.revision;
+  const revisionAfter = validateOptionalRevision(input.revision_after, "revision_after") ?? revision;
+  const activity: SharedSessionActivity = {
+    id: activityId(activityItems.length + 1),
+    seq: activityItems.length + 1,
+    revision,
+    time: new Date().toISOString(),
+    project_id: projectId,
+    session_id: bundle.session.session_id,
+    actor,
+    source,
+    kind,
+    status,
+    summary: summaryText.text.trim(),
+    ...(taskId?.text.trim() ? { task_id: taskId.text.trim() } : {}),
+    ...(correlationId?.text.trim() ? { correlation_id: correlationId.text.trim() } : {}),
+    revision_before: revisionBefore,
+    revision_after: revisionAfter,
+    ...(related.value ? { related: related.value } : {}),
+    paths: paths.values,
+    metadata: metadata.value,
+    redacted: Boolean(summaryText.redacted || taskId?.redacted || correlationId?.redacted || paths.redacted || metadata.redacted || related.redacted),
+    truncated: Boolean(
+      summaryText.truncated || taskId?.truncated || correlationId?.truncated || paths.truncated || metadata.truncated || related.truncated
+    )
+  };
+
+  appendJsonLine(bundle.paths.activity, activity);
+  const state = updateStateForWrite(bundle.state, {
+    revision,
+    actor,
+    warning:
+      activity.redacted || activity.truncated
+        ? "Some session activity metadata was redacted or truncated before storage."
+        : undefined
+  });
+  writeStateSnapshots(bundle.paths, bundle.active, bundle.session, state);
+  const summary = rebuildSessionSummary(registryRoot, projectId);
+  return { ok: true, activity, summary, revision };
+}
+
 export function getSessionUpdates(registryRoot: string, projectIdInput: string, sinceRevisionInput: number): SessionUpdatesResult {
   const projectId = validateProjectId(projectIdInput);
   if (!Number.isInteger(sinceRevisionInput) || sinceRevisionInput < 0) {
@@ -509,6 +629,7 @@ export function getSessionUpdates(registryRoot: string, projectIdInput: string, 
   );
   const evidence = readJsonLines<SharedSessionEvidence>(bundle.paths.evidence).filter((item) => item.revision > sinceRevisionInput);
   const checks = readJsonLines<SharedSessionCheck>(bundle.paths.checks).filter((item) => item.revision > sinceRevisionInput);
+  const activity = readJsonLines<SharedSessionActivity>(bundle.paths.activity).filter((item) => item.revision > sinceRevisionInput);
   return {
     ok: true,
     project_id: projectId,
@@ -519,6 +640,7 @@ export function getSessionUpdates(registryRoot: string, projectIdInput: string, 
     handoffs,
     evidence,
     checks,
+    activity,
     summary_changed: bundle.state.revision > sinceRevisionInput
   };
 }
@@ -545,12 +667,52 @@ export function getRecentChecks(
   return { ok: true, project_id: projectId, checks: readJsonLines<SharedSessionCheck>(bundle.paths.checks).slice(-cappedLimit) };
 }
 
+export function getRecentActivity(
+  registryRoot: string,
+  projectIdInput: string,
+  limit = RECENT_ACTIVITY_MAX
+): { ok: true; project_id: string; session_id: string; activities: SharedSessionActivity[]; has_more: boolean } {
+  const projectId = validateProjectId(projectIdInput);
+  const bundle = readSessionBundle(registryRoot, projectId);
+  const cappedLimit = Math.max(1, Math.min(limit, 50));
+  const activities = readJsonLines<SharedSessionActivity>(bundle.paths.activity);
+  return {
+    ok: true,
+    project_id: projectId,
+    session_id: bundle.session.session_id,
+    activities: activities.slice(-cappedLimit),
+    has_more: activities.length > cappedLimit
+  };
+}
+
+export function getActivitySinceRevision(
+  registryRoot: string,
+  projectIdInput: string,
+  sinceRevisionInput: number
+): { ok: true; project_id: string; session_id: string; from_revision: number; to_revision: number; activities: SharedSessionActivity[] } {
+  const projectId = validateProjectId(projectIdInput);
+  if (!Number.isInteger(sinceRevisionInput) || sinceRevisionInput < 0) {
+    throw new SessionStoreError("invalid_query", "since_revision must be a non-negative integer.");
+  }
+  const bundle = readSessionBundle(registryRoot, projectId);
+  return {
+    ok: true,
+    project_id: projectId,
+    session_id: bundle.session.session_id,
+    from_revision: sinceRevisionInput,
+    to_revision: bundle.state.revision,
+    activities: readJsonLines<SharedSessionActivity>(bundle.paths.activity).filter((activity) => activity.revision > sinceRevisionInput)
+  };
+}
+
 export function rebuildSessionSummary(registryRoot: string, projectIdInput: string): SharedSessionSummaryFile {
   const projectId = validateProjectId(projectIdInput);
   const bundle = readSessionBundle(registryRoot, projectId, { createIfMissing: true });
   const events = readJsonLines<SharedSessionEvent>(bundle.paths.events);
   const handoffs = currentHandoffs(readJsonLines<SharedSessionHandoff>(bundle.paths.handoffs));
   const openHandoffs = handoffs.filter((handoff) => OPEN_HANDOFF_STATUSES.has(handoff.status)).slice(-OPEN_HANDOFF_MAX);
+  const activity = readJsonLines<SharedSessionActivity>(bundle.paths.activity);
+  const recentActivity = activity.slice(-RECENT_ACTIVITY_MAX);
   const summary: SharedSessionSummaryFile = {
     schema_version: SESSION_SCHEMA_VERSION,
     project_id: projectId,
@@ -564,10 +726,12 @@ export function rebuildSessionSummary(registryRoot: string, projectIdInput: stri
     open_handoffs: openHandoffs,
     recent_evidence: readJsonLines<SharedSessionEvidence>(bundle.paths.evidence).slice(-RECENT_EVIDENCE_MAX),
     recent_checks: readJsonLines<SharedSessionCheck>(bundle.paths.checks).slice(-RECENT_CHECK_MAX),
+    recent_activity: recentActivity,
+    activity_counts: countActivityKinds(activity),
     active_clients: bundle.state.active_clients,
     next_steps: bundle.state.next_steps,
     do_not_do: bundle.state.do_not_do,
-    warnings: bundle.state.warnings,
+    warnings: activityWarnings(bundle.state.warnings, recentActivity),
     updated_at: bundle.state.updated_at
   };
   atomicWriteJson(bundle.paths.summary, summary);
@@ -596,6 +760,36 @@ export function formatSessionSummary(summary: SharedSessionSummaryFile): string 
     "Recent events:",
     ...(summary.recent_events.length
       ? summary.recent_events.map((event) => `- r${event.revision} ${event.actor}/${event.type}: ${event.summary}`)
+      : ["- None"]),
+    "",
+    "Recent activity:",
+    ...(summary.recent_activity.length
+      ? summary.recent_activity.map(
+          (activity) =>
+            `- r${activity.revision} ${activity.actor}/${activity.kind}/${activity.status}: ${activity.summary}${
+              activity.truncated ? " (truncated)" : ""
+            }`
+        )
+      : ["- None"]),
+    "",
+    "Recent evidence:",
+    ...(summary.recent_evidence.length
+      ? summary.recent_evidence.map(
+          (evidence) =>
+            `- r${evidence.revision} ${evidence.kind}/${evidence.status}${evidence.path ? ` ${evidence.path}` : ""}${
+              evidence.truncated ? " (truncated)" : ""
+            }`
+        )
+      : ["- None"]),
+    "",
+    "Recent checks:",
+    ...(summary.recent_checks.length
+      ? summary.recent_checks.map(
+          (check) =>
+            `- r${check.revision} ${check.type}/${check.status}${check.command ? ` ${check.command}` : ""}${
+              check.truncated ? " (truncated)" : ""
+            }`
+        )
       : ["- None"])
   ];
   return lines.join("\n");
@@ -638,6 +832,36 @@ export function formatSessionUpdates(updates: SessionUpdatesResult): string {
     "Handoffs:",
     ...(updates.handoffs.length
       ? updates.handoffs.map((handoff) => `- r${handoff.revision} ${handoff.id} [${handoff.status}] ${handoff.title}`)
+      : ["- None"]),
+    "",
+    "Evidence:",
+    ...(updates.evidence.length
+      ? updates.evidence.map(
+          (evidence) =>
+            `- r${evidence.revision} ${evidence.kind}/${evidence.status}${evidence.path ? ` ${evidence.path}` : ""}${
+              evidence.truncated ? " (truncated)" : ""
+            }`
+        )
+      : ["- None"]),
+    "",
+    "Checks:",
+    ...(updates.checks.length
+      ? updates.checks.map(
+          (check) =>
+            `- r${check.revision} ${check.type}/${check.status}${check.command ? ` ${check.command}` : ""}${
+              check.truncated ? " (truncated)" : ""
+            }`
+        )
+      : ["- None"]),
+    "",
+    "Activity:",
+    ...(updates.activity.length
+      ? updates.activity.map(
+          (activity) =>
+            `- r${activity.revision} ${activity.actor}/${activity.kind}/${activity.status}: ${activity.summary}${
+              activity.truncated ? " (truncated)" : ""
+            }`
+        )
       : ["- None"])
   ].join("\n");
 }
@@ -676,6 +900,7 @@ interface SessionPathSet {
   handoffs: string;
   evidence: string;
   checks: string;
+  activity: string;
 }
 
 interface SessionBundle {
@@ -751,6 +976,9 @@ function ensureSessionFiles(
   }
   if (!pathExists(paths.checks)) {
     fs.writeFileSync(paths.checks, "", "utf8");
+  }
+  if (!pathExists(paths.activity)) {
+    fs.writeFileSync(paths.activity, "", "utf8");
   }
 }
 
@@ -928,6 +1156,7 @@ function sessionBootstrapResult(summary: SharedSessionSummaryFile, bootstrapEven
     recent_events: summary.recent_events,
     recent_evidence: summary.recent_evidence,
     recent_checks: summary.recent_checks,
+    recent_activity: summary.recent_activity,
     active_clients: summary.active_clients,
     do_not_do: summary.do_not_do,
     warnings: summary.warnings,
@@ -1027,7 +1256,8 @@ function sessionPaths(registryRoot: string, projectId: string, sessionId: string
     events: path.join(sessionDir, "events.jsonl"),
     handoffs: path.join(sessionDir, "handoffs.jsonl"),
     evidence: path.join(sessionDir, "evidence.jsonl"),
-    checks: path.join(sessionDir, "checks.jsonl")
+    checks: path.join(sessionDir, "checks.jsonl"),
+    activity: path.join(sessionDir, "activity.jsonl")
   };
 }
 
@@ -1055,6 +1285,10 @@ function checkId(seq: number): string {
   return `chk_${seq.toString().padStart(6, "0")}`;
 }
 
+function activityId(seq: number): string {
+  return `act_${seq.toString().padStart(6, "0")}`;
+}
+
 function assertExpectedRevision(currentRevision: number, expectedRevision?: number): void {
   if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
     throw new SessionStoreError(
@@ -1063,6 +1297,16 @@ function assertExpectedRevision(currentRevision: number, expectedRevision?: numb
       409
     );
   }
+}
+
+function validateOptionalRevision(value: number | undefined, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new SessionStoreError("invalid_session_activity", `${label} must be a non-negative integer.`);
+  }
+  return value;
 }
 
 function validateActor(value: string): SessionActor {
@@ -1156,6 +1400,73 @@ function validateCheckStatus(value: string): SessionCheckStatus {
   return value as SessionCheckStatus;
 }
 
+function validateActivityKind(value: string): SessionActivityKind {
+  if (!ACTIVITY_KINDS.has(value as SessionActivityKind)) {
+    throw new SessionStoreError("invalid_activity_kind", "Session activity kind is not allowed.");
+  }
+  return value as SessionActivityKind;
+}
+
+function validateActivitySource(value: string): SessionActivitySource {
+  if (!ACTIVITY_SOURCES.has(value as SessionActivitySource)) {
+    throw new SessionStoreError("invalid_activity_source", "Session activity source is not allowed.");
+  }
+  return value as SessionActivitySource;
+}
+
+function validateActivityStatus(value: string): SessionActivityStatus {
+  if (!ACTIVITY_STATUSES.has(value as SessionActivityStatus)) {
+    throw new SessionStoreError("invalid_activity_status", "Session activity status is not allowed.");
+  }
+  return value as SessionActivityStatus;
+}
+
+function countActivityKinds(activities: SharedSessionActivity[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const activity of activities) {
+    counts[activity.kind] = (counts[activity.kind] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function activityWarnings(existingWarnings: string[], recentActivity: SharedSessionActivity[]): string[] {
+  const warnings = [...existingWarnings];
+  if (recentActivity.some((activity) => activity.redacted || activity.truncated)) {
+    const warning = "Some recent activity metadata was redacted or truncated.";
+    if (!warnings.includes(warning)) {
+      warnings.push(warning);
+    }
+  }
+  return warnings.slice(-WARNING_MAX);
+}
+
+function sanitizeActivityRelated(input: AppendSessionActivityInput["related"]): {
+  value?: SharedSessionActivity["related"];
+  redacted: boolean;
+  truncated: boolean;
+} {
+  if (!input || typeof input !== "object") {
+    return { redacted: false, truncated: false };
+  }
+  const output: NonNullable<SharedSessionActivity["related"]> = {};
+  let redacted = false;
+  let truncated = false;
+  for (const key of ["event_id", "handoff_id", "evidence_id", "check_id", "activity_id"] as const) {
+    const value = input[key];
+    if (value === null) {
+      output[key] = null;
+      continue;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const sanitized = sanitizeSessionText(value, METADATA_STRING_MAX);
+      output[key] = sanitized.text.trim();
+      redacted = redacted || sanitized.redacted;
+      truncated = truncated || sanitized.truncated;
+    }
+  }
+  return Object.keys(output).length ? { value: output, redacted, truncated } : { redacted, truncated };
+}
+
 function sanitizeSessionMetadata(input: Record<string, unknown>): {
   value: Record<string, unknown>;
   redacted: boolean;
@@ -1234,7 +1545,9 @@ function sanitizeMetadataKey(input: string): string {
 }
 
 function isBlockedMetadataKey(key: string): boolean {
-  return /^(content|raw_content|file_content|diff|raw_diff|snippet|authorization|local_token)$/i.test(key);
+  return /^(content|raw_content|file_content|body|diff|raw_diff|patch|snippet|stdout|stderr|output|raw_output|terminal_output|authorization|local_token)$/i.test(
+    key
+  );
 }
 
 function looksSensitiveMetadataQuery(input: string): boolean {

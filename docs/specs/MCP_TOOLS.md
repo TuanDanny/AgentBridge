@@ -85,3 +85,12 @@ The current implementation also exposes:
 - `request_user_approval`
 - `get_repo_status`
 - `classify_command`
+- `session_bootstrap`
+- `session_summary`
+- `session_updates`
+- `session_activity`
+- `session_append_event`
+- `session_add_handoff`
+- `session_update_handoff`
+- `session_set_goal`
+- `session_append_check`

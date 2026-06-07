@@ -61,13 +61,14 @@ function findRepoRoot(start) {
 }
 
 function resolveAgentBridgeRoot(pluginRoot) {
+  const repoRelativeRoot = path.resolve(pluginRoot, "..", "..");
   const candidates = [
     process.env.AGENTBRIDGE_ROOT,
     process.env.CODEXLINK_AGENTBRIDGE_ROOT,
-    process.cwd(),
-    path.resolve(pluginRoot, "..", ".."),
+    repoRelativeRoot,
     findRepoRoot(pluginRoot),
-    findRepoRoot(process.cwd())
+    findRepoRoot(process.cwd()),
+    process.cwd()
   ].filter(Boolean);
 
   for (const candidate of candidates) {

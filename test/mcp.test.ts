@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAgentBridgeMcpServer } from "../src/mcpServer.js";
 import {
   addSessionHandoff,
+  appendSessionActivity,
   appendSessionEvent,
   getSessionSummary,
   listSessionHandoffs,
@@ -157,6 +158,7 @@ describe("MCP server", () => {
         "session_bootstrap",
         "session_summary",
         "session_updates",
+        "session_activity",
         "session_list_handoffs",
         "session_append_event",
         "session_add_handoff",
@@ -262,14 +264,35 @@ describe("MCP server", () => {
       type: "decision",
       summary: "HTTP-like write visible through MCP"
     });
-    const updates = firstJson<{ events: Array<{ summary: string }>; to_revision: number }>(
+    const storedActivity = appendSessionActivity(root, projectId, {
+      actor: "codex",
+      source: "cli",
+      kind: "file_verify",
+      status: "success",
+      summary: "CLI activity visible through MCP",
+      paths: ["README.md"],
+      metadata: { content: "raw content should not store", bytes: 10 }
+    });
+    const activity = firstJson<{ activities: Array<{ kind: string; summary: string; metadata: Record<string, unknown> }> }>(
+      await connected.client.callTool({
+        name: "session_activity",
+        arguments: { project_id: projectId, limit: 5 }
+      })
+    );
+    expect(activity.activities.at(-1)).toMatchObject({
+      kind: "file_verify",
+      summary: "CLI activity visible through MCP"
+    });
+    expect(activity.activities.at(-1)?.metadata).not.toHaveProperty("content");
+    const updates = firstJson<{ events: Array<{ summary: string }>; activity: Array<{ kind: string }>; to_revision: number }>(
       await connected.client.callTool({
         name: "session_updates",
         arguments: { project_id: projectId, since_revision: mcpEvent.revision }
       })
     );
-    expect(updates.to_revision).toBe(httpLikeEvent.revision);
+    expect(updates.to_revision).toBe(storedActivity.revision);
     expect(updates.events.some((event) => event.summary === "HTTP-like write visible through MCP")).toBe(true);
+    expect(updates.activity.some((item) => item.kind === "file_verify")).toBe(true);
 
     const mcpHandoff = firstJson<{ handoff: { id: string; title: string }; revision: number }>(
       await connected.client.callTool({

@@ -69,6 +69,7 @@ import {
 } from "./inspector.js";
 import {
   addSessionHandoff,
+  appendSessionActivity,
   appendSessionCheck,
   appendSessionEvidence,
   appendSessionEvent,
@@ -79,6 +80,7 @@ import {
   formatSessionUpdates,
   getOrCreateActiveSession,
   getRecentChecks,
+  getRecentActivity,
   getRecentEvidence,
   getSessionSummary,
   getSessionUpdates,
@@ -88,6 +90,9 @@ import {
 } from "./sessionStore.js";
 import type {
   SessionActor,
+  SessionActivityKind,
+  SessionActivitySource,
+  SessionActivityStatus,
   SessionBootstrapAdapter,
   SessionBootstrapClient,
   SessionBootstrapMode,
@@ -235,6 +240,22 @@ function parseCommaList(value?: string): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
+}
+
+function parseJsonObjectOption(value: string | undefined, optionName: string): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${optionName} must be a JSON object.`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function resolveCliProject(id: string): { root: string; projectId: string; projectName?: string; registered: boolean } {
@@ -729,6 +750,89 @@ session
       handleError(error);
     }
   });
+
+session
+  .command("activity")
+  .description("List recent shared session activity timeline metadata.")
+  .argument("<projectId>", "safe project id")
+  .option("--recent", "show recent activity timeline", true)
+  .option("--limit <count>", "maximum activity entries", "10")
+  .option("--json", "print JSON result")
+  .action((projectId: string, options: { recent?: boolean; limit: string; json?: boolean }) => {
+    try {
+      const resolvedProjectId = resolveCliSessionProject(projectId);
+      const limit = parseNonNegativeIntegerOption(options.limit, "--limit");
+      const result = getRecentActivity(process.cwd(), resolvedProjectId, limit || 10);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        [
+          `Session activity: ${resolvedProjectId}`,
+          "",
+          ...(result.activities.length
+            ? result.activities.map((item) => `- r${item.revision} ${item.actor}/${item.kind}/${item.status}: ${item.summary}`)
+            : ["- None"])
+        ].join("\n")
+      );
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+session
+  .command("activity-add")
+  .description("Append shared session activity metadata without storing raw content.")
+  .argument("<projectId>", "safe project id")
+  .requiredOption("--kind <kind>", "activity kind")
+  .requiredOption("--summary <summary>", "short activity summary")
+  .option("--actor <actor>", "actor recording the activity", "codex")
+  .option("--source <source>", "mcp, cli, http, gpt_actions, codex_plugin, doctor, smoke, script, or system", "cli")
+  .option("--status <status>", "success, fail, warning, skipped, or unknown", "success")
+  .option("--task-id <taskId>", "optional task id")
+  .option("--correlation-id <id>", "optional correlation id")
+  .option("--path <path>", "related path; repeatable", collectOption, [] as string[])
+  .option("--metadata <json>", "optional small JSON metadata object")
+  .option("--expected-revision <revision>", "optional optimistic concurrency revision")
+  .option("--json", "print JSON result")
+  .action(
+    (
+      projectId: string,
+      options: {
+        kind: string;
+        summary: string;
+        actor: string;
+        source: string;
+        status: string;
+        taskId?: string;
+        correlationId?: string;
+        path: string[];
+        metadata?: string;
+        expectedRevision?: string;
+        json?: boolean;
+      }
+    ) => {
+      try {
+        const resolvedProjectId = resolveCliSessionProject(projectId);
+        const result = appendSessionActivity(process.cwd(), resolvedProjectId, {
+          actor: options.actor as SessionActor,
+          source: options.source as SessionActivitySource,
+          kind: options.kind as SessionActivityKind,
+          status: options.status as SessionActivityStatus,
+          summary: options.summary,
+          task_id: options.taskId,
+          correlation_id: options.correlationId,
+          paths: options.path,
+          metadata: parseJsonObjectOption(options.metadata, "--metadata"),
+          ...(options.expectedRevision ? { expected_revision: parseNonNegativeIntegerOption(options.expectedRevision, "--expected-revision") } : {})
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionSummary(result.summary));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
 
 session
   .command("check")

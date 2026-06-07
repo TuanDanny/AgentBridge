@@ -46,10 +46,12 @@ Verify MCP tools after Codex reloads the plugin:
 ```text
 session_bootstrap
 session_summary
+session_activity
 session_append_event
 session_add_handoff
 session_update_handoff
 session_set_goal
+session_append_check
 ```
 
 If `session_bootstrap` is missing but older session tools are present, the MCP server is stale. Restart Codex or reload plugins so the stdio server starts from the current `dist`.

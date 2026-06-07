@@ -37,6 +37,44 @@ export type SessionEvidenceSource = "http" | "cli" | "mcp" | "github" | "script"
 export type SessionEvidenceStatus = "seen" | "complete" | "partial" | "truncated" | "blocked" | "error";
 export type SessionCheckType = "build" | "test" | "diff_check" | "workflow" | "git_status" | "smoke";
 export type SessionCheckStatus = "pass" | "fail" | "warning" | "unknown" | "skipped";
+export type SessionActivityStatus = "success" | "fail" | "warning" | "skipped" | "unknown";
+export type SessionActivitySource = "mcp" | "cli" | "http" | "gpt_actions" | "codex_plugin" | "doctor" | "smoke" | "script" | "system";
+export type SessionActivityKind =
+  | "session_bootstrap"
+  | "session_resume"
+  | "session_summary_read"
+  | "active_client_heartbeat"
+  | "handoff_seen"
+  | "handoff_added"
+  | "handoff_update"
+  | "handoff_acknowledged"
+  | "handoff_done"
+  | "file_create"
+  | "file_edit"
+  | "file_delete"
+  | "file_verify"
+  | "file_status"
+  | "file_diff_summary"
+  | "command_started"
+  | "command_finished"
+  | "check_logged"
+  | "test_passed"
+  | "test_failed"
+  | "build_passed"
+  | "build_failed"
+  | "tree_seen"
+  | "file_read_seen"
+  | "grep_seen"
+  | "inspect_seen"
+  | "evidence_recorded"
+  | "workspace_snapshot"
+  | "git_status_seen"
+  | "changed_files_summary"
+  | "activity_gap_detected"
+  | "secret_redacted"
+  | "raw_content_blocked"
+  | "content_truncated"
+  | "unsafe_path_blocked";
 export type SessionBootstrapClient = "codex" | "chatgpt" | "user" | "system";
 export type SessionBootstrapAdapter = "mcp" | "cli" | "codex_plugin";
 export type SessionBootstrapMode = "start" | "resume";
@@ -165,6 +203,35 @@ export interface SharedSessionCheck {
   truncated: boolean;
 }
 
+export interface SharedSessionActivity {
+  id: string;
+  seq: number;
+  revision: number;
+  time: string;
+  project_id: string;
+  session_id: string;
+  actor: SessionActor;
+  source: SessionActivitySource;
+  kind: SessionActivityKind;
+  status: SessionActivityStatus;
+  summary: string;
+  task_id?: string;
+  correlation_id?: string;
+  revision_before?: number;
+  revision_after?: number;
+  related?: {
+    event_id?: string | null;
+    handoff_id?: string | null;
+    evidence_id?: string | null;
+    check_id?: string | null;
+    activity_id?: string | null;
+  };
+  paths: string[];
+  metadata: Record<string, unknown>;
+  redacted: boolean;
+  truncated: boolean;
+}
+
 export interface SharedSessionSummaryFile {
   schema_version: 1;
   project_id: string;
@@ -178,6 +245,8 @@ export interface SharedSessionSummaryFile {
   open_handoffs: SharedSessionHandoff[];
   recent_evidence: SharedSessionEvidence[];
   recent_checks: SharedSessionCheck[];
+  recent_activity: SharedSessionActivity[];
+  activity_counts: Record<string, number>;
   active_clients: SharedSessionActiveClient[];
   next_steps: string[];
   do_not_do: string[];
@@ -240,6 +309,28 @@ export interface AppendSessionCheckInput {
   expected_revision?: number;
 }
 
+export interface AppendSessionActivityInput {
+  actor?: SessionActor;
+  source: SessionActivitySource;
+  kind: SessionActivityKind;
+  status?: SessionActivityStatus;
+  summary: string;
+  task_id?: string;
+  correlation_id?: string;
+  revision_before?: number;
+  revision_after?: number;
+  related?: {
+    event_id?: string | null;
+    handoff_id?: string | null;
+    evidence_id?: string | null;
+    check_id?: string | null;
+    activity_id?: string | null;
+  };
+  paths?: string[];
+  metadata?: Record<string, unknown>;
+  expected_revision?: number;
+}
+
 export interface SessionBootstrapInput {
   actor?: SessionActor;
   client?: SessionBootstrapClient;
@@ -262,6 +353,7 @@ export interface SessionBootstrapResult {
   recent_events: SharedSessionEvent[];
   recent_evidence: SharedSessionEvidence[];
   recent_checks: SharedSessionCheck[];
+  recent_activity: SharedSessionActivity[];
   active_clients: SharedSessionActiveClient[];
   do_not_do: string[];
   warnings: string[];
@@ -286,5 +378,6 @@ export interface SessionUpdatesResult {
   handoffs: SharedSessionHandoff[];
   evidence: SharedSessionEvidence[];
   checks: SharedSessionCheck[];
+  activity: SharedSessionActivity[];
   summary_changed: boolean;
 }

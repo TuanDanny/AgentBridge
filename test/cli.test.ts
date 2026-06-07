@@ -449,18 +449,48 @@ describe("compiled CLI smoke tests", () => {
     const checks = JSON.parse(runCli(registryRoot, "session", "checks", "AgentBridge", "--json"));
     expect(checks.checks.at(-1)).toMatchObject({ type: "test", status: "pass", exit_code: 0, duration_ms: 42 });
 
+    const activity = JSON.parse(
+      runCli(
+        registryRoot,
+        "session",
+        "activity-add",
+        "AgentBridge",
+        "--kind",
+        "file_create",
+        "--status",
+        "success",
+        "--summary",
+        `Created file with OPENAI_API_KEY=${token}`,
+        "--path",
+        "notes/activity.txt",
+        "--metadata",
+        JSON.stringify({ content: `raw content ${token}`, stdout: "long output should not store", bytes: 12 }),
+        "--json"
+      )
+    );
+    expect(activity.activity.id).toBe("act_000001");
+    expect(activity.activity.summary).toContain("[REDACTED]");
+    expect(activity.activity.metadata).not.toHaveProperty("content");
+    expect(activity.activity.metadata).not.toHaveProperty("stdout");
+    const recentActivity = JSON.parse(runCli(registryRoot, "session", "activity", "AgentBridge", "--json"));
+    expect(recentActivity.activities.at(-1)).toMatchObject({ kind: "file_create", status: "success" });
+    expect(JSON.stringify(recentActivity)).not.toContain(token);
+
     const updates = JSON.parse(runCli(registryRoot, "session", "updates", "AgentBridge", "--since", "1", "--json"));
     expect(updates.events.length).toBeGreaterThan(0);
     expect(updates.checks.some((item: { type: string; status: string }) => item.type === "test" && item.status === "pass")).toBe(true);
+    expect(updates.activity.some((item: { kind: string; status: string }) => item.kind === "file_create" && item.status === "success")).toBe(true);
 
     const sessionDir = path.join(registryRoot, ".agentbridge", "sessions", "AgentBridge");
     expect(fs.existsSync(path.join(sessionDir, "active_session.json"))).toBe(true);
     const stored = [
       fs.readFileSync(path.join(sessionDir, active.session.session_id, "events.jsonl"), "utf8"),
-      fs.readFileSync(path.join(sessionDir, active.session.session_id, "checks.jsonl"), "utf8")
+      fs.readFileSync(path.join(sessionDir, active.session.session_id, "checks.jsonl"), "utf8"),
+      fs.readFileSync(path.join(sessionDir, active.session.session_id, "activity.jsonl"), "utf8")
     ].join("\n");
     expect(stored).not.toContain(token);
     expect(stored).not.toContain("Authorization: Bearer b");
+    expect(stored).not.toContain("long output should not store");
   });
 
   it("supports CodexLink setup dry-run and doctor JSON without printing secrets", () => {
@@ -483,6 +513,14 @@ describe("compiled CLI smoke tests", () => {
     expect(doctorOutput).not.toContain("Bearer ");
     expect(doctorOutput).not.toContain("OPENAI_API_KEY");
     expect(doctorOutput).not.toContain("sk-");
+  });
+
+  it("uses setup gpt-actions host and port in dry-run next steps", () => {
+    const setup = JSON.parse(
+      runCli(process.cwd(), "setup", "gpt-actions", "--dry-run", "--host", "127.0.0.2", "--port", "7788", "--json")
+    );
+    expect(setup.ok).toBe(true);
+    expect(setup.next_steps).toContain("Start AgentBridge local server at http://127.0.0.2:7788.");
   });
 
   it("keeps active project event logs local-only", () => {

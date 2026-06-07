@@ -4,11 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  appendSessionActivity,
   appendSessionCheck,
   appendSessionEvidence,
   addSessionHandoff,
   appendSessionEvent,
   bootstrapSession,
+  getActivitySinceRevision,
+  getRecentActivity,
   getRecentChecks,
   getRecentEvidence,
   getOrCreateActiveSession,
@@ -259,6 +262,12 @@ describe("shared session store", () => {
         truncated: true,
         content: `UNIQUE_RAW_CONTENT_VALUE ${token}`,
         snippet: `snippet ${token}`,
+        stdout: "long terminal output that must not be stored",
+        stderr: "error output that must not be stored",
+        raw_output: "raw output that must not be stored",
+        terminal_output: "terminal output that must not be stored",
+        body: "body text that must not be stored",
+        patch: "diff --git a/file b/file",
         query: `token=${token}`,
         nested: {
           secret: `Bearer ${"d".repeat(32)}`
@@ -269,6 +278,12 @@ describe("shared session store", () => {
     expect(evidence.evidence.redacted).toBe(true);
     expect(evidence.evidence.metadata).not.toHaveProperty("content");
     expect(evidence.evidence.metadata).not.toHaveProperty("snippet");
+    expect(evidence.evidence.metadata).not.toHaveProperty("stdout");
+    expect(evidence.evidence.metadata).not.toHaveProperty("stderr");
+    expect(evidence.evidence.metadata).not.toHaveProperty("raw_output");
+    expect(evidence.evidence.metadata).not.toHaveProperty("terminal_output");
+    expect(evidence.evidence.metadata).not.toHaveProperty("body");
+    expect(evidence.evidence.metadata).not.toHaveProperty("patch");
 
     const check = appendSessionCheck(root, projectId, {
       actor: "codex",
@@ -302,7 +317,87 @@ describe("shared session store", () => {
     expect(serialized).not.toContain(token);
     expect(serialized).not.toContain("UNIQUE_RAW_CONTENT_VALUE");
     expect(serialized).not.toContain("snippet ");
+    expect(serialized).not.toContain("terminal output that must not be stored");
+    expect(serialized).not.toContain("diff --git");
     expect(serialized).not.toContain("Bearer d");
+    expect(serialized).not.toContain("OPENAI_API_KEY=");
+  });
+
+  it("stores redacted activity timeline metadata and exposes recent activity in summaries", () => {
+    const root = makeTempRoot();
+    const projectId = "AgentBridge";
+    const token = `sk-${"e".repeat(32)}`;
+    getOrCreateActiveSession(root, projectId);
+
+    const first = appendSessionActivity(root, projectId, {
+      actor: "codex",
+      source: "cli",
+      kind: "file_create",
+      status: "success",
+      summary: `Created file with OPENAI_API_KEY=${token}`,
+      task_id: "task_000001",
+      correlation_id: "notes/activity.txt",
+      paths: ["notes/activity.txt"],
+      metadata: {
+        git_status: "untracked",
+        bytes: 42,
+        content: `RAW_FILE_CONTENT_SHOULD_NOT_STORE ${token}`,
+        stdout: "RAW_TERMINAL_OUTPUT_SHOULD_NOT_STORE",
+        patch: "diff --git a/notes/activity.txt b/notes/activity.txt",
+        oversized: "x".repeat(5000)
+      }
+    });
+    const second = appendSessionActivity(root, projectId, {
+      actor: "codex",
+      source: "cli",
+      kind: "file_verify",
+      status: "success",
+      summary: "Verified file metadata only",
+      paths: ["notes/activity.txt"],
+      related: {
+        activity_id: first.activity.id
+      },
+      metadata: {
+        sha256: "abc123",
+        raw_content_stored: false
+      }
+    });
+
+    expect(first.activity.id).toBe("act_000001");
+    expect(first.activity.seq).toBe(1);
+    expect(first.activity.revision_before).toBe(1);
+    expect(first.activity.revision_after).toBe(2);
+    expect(first.activity.summary).toContain("[REDACTED]");
+    expect(first.activity.redacted).toBe(true);
+    expect(first.activity.truncated).toBe(true);
+    expect(first.activity.metadata).not.toHaveProperty("content");
+    expect(first.activity.metadata).not.toHaveProperty("stdout");
+    expect(first.activity.metadata).not.toHaveProperty("patch");
+    expect(second.activity.id).toBe("act_000002");
+    expect(second.activity.seq).toBe(2);
+
+    const recent = getRecentActivity(root, projectId, 1);
+    expect(recent.activities).toHaveLength(1);
+    expect(recent.activities[0].id).toBe(second.activity.id);
+    expect(recent.has_more).toBe(true);
+
+    const since = getActivitySinceRevision(root, projectId, 1);
+    expect(since.activities.map((item) => item.id)).toEqual(["act_000001", "act_000002"]);
+
+    const summary = getSessionSummary(root, projectId);
+    expect(summary.recent_activity.map((item) => item.id)).toEqual(["act_000001", "act_000002"]);
+    expect(summary.activity_counts.file_create).toBe(1);
+    expect(summary.activity_counts.file_verify).toBe(1);
+    expect(summary.warnings).toContain("Some recent activity metadata was redacted or truncated.");
+
+    const sessionDir = path.join(root, ".agentbridge", "sessions", projectId, getOrCreateActiveSession(root, projectId).session.session_id);
+    const activityPath = path.join(sessionDir, "activity.jsonl");
+    expect(fs.existsSync(activityPath)).toBe(true);
+    const serialized = [fs.readFileSync(activityPath, "utf8"), fs.readFileSync(path.join(sessionDir, "summary.json"), "utf8")].join("\n");
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain("RAW_FILE_CONTENT_SHOULD_NOT_STORE");
+    expect(serialized).not.toContain("RAW_TERMINAL_OUTPUT_SHOULD_NOT_STORE");
+    expect(serialized).not.toContain("diff --git");
     expect(serialized).not.toContain("OPENAI_API_KEY=");
   });
 
