@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -284,13 +285,28 @@ describe("MCP server", () => {
       summary: "CLI activity visible through MCP"
     });
     expect(activity.activities.at(-1)?.metadata).not.toHaveProperty("content");
+
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore", windowsHide: true });
+    fs.writeFileSync(path.join(root, ".gitignore"), ".agentbridge/\n", "utf8");
+    fs.writeFileSync(path.join(root, "mcp-gap.txt"), "metadata gap only\n", "utf8");
+    const reconciled = firstJson<{ snapshot: { changed_count: number }; unlogged_changes: Array<{ path: string }>; activities_written: Array<{ kind: string; paths: string[] }> }>(
+      await connected.client.callTool({
+        name: "session_reconcile",
+        arguments: { project_id: projectId }
+      })
+    );
+    expect(reconciled.snapshot.changed_count).toBeGreaterThan(0);
+    expect(reconciled.unlogged_changes.some((file) => file.path === "mcp-gap.txt")).toBe(true);
+    expect(reconciled.activities_written.some((activity) => activity.kind === "workspace_snapshot")).toBe(true);
+    expect(reconciled.activities_written.some((activity) => activity.kind === "activity_gap_detected" && activity.paths.includes("mcp-gap.txt"))).toBe(true);
+
     const updates = firstJson<{ events: Array<{ summary: string }>; activity: Array<{ kind: string }>; to_revision: number }>(
       await connected.client.callTool({
         name: "session_updates",
         arguments: { project_id: projectId, since_revision: mcpEvent.revision }
       })
     );
-    expect(updates.to_revision).toBe(storedActivity.revision);
+    expect(updates.to_revision).toBeGreaterThanOrEqual(storedActivity.revision);
     expect(updates.events.some((event) => event.summary === "HTTP-like write visible through MCP")).toBe(true);
     expect(updates.activity.some((item) => item.kind === "file_verify")).toBe(true);
 

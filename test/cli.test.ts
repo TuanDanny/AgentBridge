@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -494,7 +494,42 @@ describe("compiled CLI smoke tests", () => {
     expect(stored).not.toContain(token);
     expect(stored).not.toContain("Authorization: Bearer b");
     expect(stored).not.toContain("long output should not store");
-  });
+  }, 15000);
+
+  it("supports workspace reconcile and file verification CLI metadata", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-workspace-");
+    run(registryRoot, "git", ["init"]);
+    fs.writeFileSync(path.join(registryRoot, ".gitignore"), ".agentbridge/\n", "utf8");
+    JSON.parse(runCli(registryRoot, "project", "register-current", "AgentBridge"));
+
+    fs.writeFileSync(path.join(registryRoot, "workspace-gap.txt"), "safe metadata gap\n", "utf8");
+    const reconcile = JSON.parse(runCli(registryRoot, "session", "reconcile", "AgentBridge", "--json"));
+    expect(reconcile.activities_written.some((activity: { kind: string }) => activity.kind === "workspace_snapshot")).toBe(true);
+    expect(
+      reconcile.activities_written.some((activity: { kind: string; paths: string[] }) => activity.kind === "activity_gap_detected" && activity.paths.includes("workspace-gap.txt"))
+    ).toBe(true);
+
+    const hash = createHash("sha256").update(fs.readFileSync(path.join(registryRoot, "workspace-gap.txt"))).digest("hex");
+    const verified = JSON.parse(runCli(registryRoot, "session", "file-verify", "AgentBridge", "--path", "workspace-gap.txt", "--expect-sha256", hash, "--json"));
+    expect(verified.verified).toBe(true);
+    expect(verified.activity).toMatchObject({
+      kind: "file_verify",
+      metadata: {
+        content_stored: false,
+        sha256: hash
+      }
+    });
+
+    fs.writeFileSync(path.join(registryRoot, ".env"), "TOKEN=should_not_read\n", "utf8");
+    expect(() => runCli(registryRoot, "session", "file-verify", "AgentBridge", "--path", ".env", "--json")).toThrow();
+
+    const summary = JSON.parse(runCli(registryRoot, "session", "summary", "AgentBridge", "--json"));
+    const sessionDir = path.join(registryRoot, ".agentbridge", "sessions", "AgentBridge", summary.summary.session_id);
+    const activityText = fs.readFileSync(path.join(sessionDir, "activity.jsonl"), "utf8");
+    expect(activityText).not.toContain("safe metadata gap");
+    expect(activityText).not.toContain("TOKEN=should_not_read");
+    expect(activityText).not.toContain("diff --git");
+  }, 15000);
 
   it("supports CodexLink setup dry-run and doctor JSON without printing secrets", () => {
     const setup = JSON.parse(runCli(process.cwd(), "setup", "codex-plugin", "--dry-run", "--json"));

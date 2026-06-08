@@ -231,13 +231,15 @@ export function bootstrapSession(
         status: "success",
         summary: `Session ${mode === "resume" ? "resumed" : "bootstrapped"} by ${client}/${adapter}.`,
         related: { event_id: event.id },
-        metadata: {
-          client,
-          adapter,
-          mode,
-          bootstrap_event_created: true,
-          heartbeat_updated: true
-        }
+      metadata: {
+        client,
+        adapter,
+        mode,
+        bootstrap_event_created: true,
+        heartbeat_updated: true
+      },
+      force_redacted: sourceText.redacted,
+      force_truncated: sourceText.truncated
       },
       revision,
       state.revision,
@@ -378,7 +380,9 @@ export function addSessionHandoff(
         to,
         status_after: handoff.status,
         message_stored: false
-      }
+      },
+      force_redacted: handoff.redacted || event.redacted,
+      force_truncated: handoff.truncated || event.truncated
     },
     revision,
     bundle.state.revision,
@@ -455,7 +459,9 @@ export function updateSessionHandoff(
         result_summary: resultSummary.text.trim() || null,
         revision_before: bundle.state.revision,
         revision_after: revision
-      }
+      },
+      force_redacted: updated.redacted || event.redacted,
+      force_truncated: updated.truncated || event.truncated
     },
     revision,
     bundle.state.revision,
@@ -505,7 +511,9 @@ export function setSessionGoal(
         phase,
         status,
         goal_stored: true
-      }
+      },
+      force_redacted: goal.redacted || event.redacted,
+      force_truncated: goal.truncated || event.truncated
     },
     revision,
     bundle.state.revision,
@@ -592,7 +600,9 @@ export function appendSessionEvidence(
         evidence_status: status,
         path: evidence.path ?? null,
         content_stored: false
-      }
+      },
+      force_redacted: evidence.redacted,
+      force_truncated: evidence.truncated
     },
     revision,
     bundle.state.revision,
@@ -671,7 +681,9 @@ export function appendSessionCheck(
         output_stored: false,
         redacted: check.redacted,
         truncated: check.truncated
-      }
+      },
+      force_redacted: check.redacted,
+      force_truncated: check.truncated
     },
     revision,
     bundle.state.revision,
@@ -1561,10 +1573,18 @@ function appendActivityRecord(
     paths: paths.values,
     metadata: metadata.value,
     redacted: Boolean(
-      summaryText.redacted || source.redacted || taskId?.redacted || correlationId?.redacted || paths.redacted || metadata.redacted || related.redacted
+      input.force_redacted ||
+        summaryText.redacted ||
+        source.redacted ||
+        taskId?.redacted ||
+        correlationId?.redacted ||
+        paths.redacted ||
+        metadata.redacted ||
+        related.redacted
     ),
     truncated: Boolean(
-      summaryText.truncated ||
+      input.force_truncated ||
+        summaryText.truncated ||
         source.truncated ||
         taskId?.truncated ||
         correlationId?.truncated ||

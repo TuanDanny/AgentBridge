@@ -68,6 +68,12 @@ import {
   formatInspectorHuman
 } from "./inspector.js";
 import {
+  formatFileVerify,
+  formatWorkspaceReconcile,
+  reconcileWorkspaceActivity,
+  verifyWorkspaceFile
+} from "./workspaceActivity.js";
+import {
   addSessionHandoff,
   appendSessionActivity,
   appendSessionCheck,
@@ -833,6 +839,38 @@ session
       }
     }
   );
+
+session
+  .command("reconcile")
+  .description("Record a safe workspace snapshot and detect changed files without recent activity.")
+  .argument("<projectId>", "safe project id")
+  .option("--json", "print JSON result")
+  .action((projectId: string, options: { json?: boolean }) => {
+    try {
+      const project = resolveCliProject(projectId);
+      const result = reconcileWorkspaceActivity(process.cwd(), project.root, project.projectId);
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatWorkspaceReconcile(result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+session
+  .command("file-verify")
+  .description("Verify safe text file metadata and record a file_verify activity without storing content.")
+  .argument("<projectId>", "safe project id")
+  .requiredOption("--path <path>", "project-relative safe text file path")
+  .option("--expect-sha256 <hash>", "optional expected SHA-256 hash")
+  .option("--json", "print JSON result")
+  .action((projectId: string, options: { path: string; expectSha256?: string; json?: boolean }) => {
+    try {
+      const project = resolveCliProject(projectId);
+      const result = verifyWorkspaceFile(process.cwd(), project.root, project.projectId, options.path, options.expectSha256);
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatFileVerify(result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
 
 session
   .command("check")

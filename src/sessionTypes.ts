@@ -342,6 +342,8 @@ export interface AppendSessionActivityInput {
   };
   paths?: string[];
   metadata?: Record<string, unknown>;
+  force_redacted?: boolean;
+  force_truncated?: boolean;
   expected_revision?: number;
 }
 

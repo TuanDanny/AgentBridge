@@ -5,7 +5,7 @@ import { appendText, readTextIfExists, writeText } from "./fsx.js";
 import { getGitInfo } from "./git.js";
 import { bridgePath, resolveProjectRoot } from "./paths.js";
 import { redactSecrets } from "./redact.js";
-import { projectIdFromRoot, validateProjectId } from "./registry.js";
+import { findProject, listProjects, projectIdFromRoot, validateProjectId } from "./registry.js";
 import { classifyCommand, createApproval } from "./safety.js";
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
 import {
@@ -23,6 +23,7 @@ import {
   updateSessionHandoff
 } from "./sessionStore.js";
 import type { SessionHandoffStatus } from "./sessionTypes.js";
+import { reconcileWorkspaceActivity } from "./workspaceActivity.js";
 import {
   captureProject,
   createChatGptReview,
@@ -85,12 +86,16 @@ const sessionActivityKindSchema = z.enum([
   "session_bootstrap",
   "session_resume",
   "session_summary_read",
+  "session_goal_set",
   "active_client_heartbeat",
   "handoff_seen",
   "handoff_added",
   "handoff_update",
   "handoff_acknowledged",
   "handoff_done",
+  "handoff_blocked",
+  "handoff_cancelled",
+  "handoff_superseded",
   "file_create",
   "file_edit",
   "file_delete",
@@ -125,6 +130,20 @@ const activeHandoffStatuses = new Set<SessionHandoffStatus>(["open", "acknowledg
 
 function sessionProjectId(root: string, projectId?: string): string {
   return projectId ? validateProjectId(projectId) : projectIdFromRoot(root);
+}
+
+function sessionProject(root: string, projectId?: string): { projectId: string; projectRoot: string } {
+  const id = sessionProjectId(root, projectId);
+  const projects = listProjects(root);
+  if (projectId && projects.length) {
+    const registered = findProject(root, id);
+    if (!registered) {
+      throw new Error("Project is not registered.");
+    }
+    return { projectId: registered.id, projectRoot: registered.root };
+  }
+  const registered = projects.find((project) => project.id.toLowerCase() === id.toLowerCase());
+  return { projectId: registered?.id ?? id, projectRoot: registered?.root ?? root };
 }
 
 export function createAgentBridgeMcpServer(rootInput = process.cwd()): McpServer {
@@ -312,6 +331,28 @@ export function createAgentBridgeMcpServer(rootInput = process.cwd()): McpServer
       const activities = (result.activities ?? []).filter((activity) => (kind ? activity.kind === kind : true));
       const structured = { ...result, activities };
       return textResult(JSON.stringify(structured, null, 2), structured);
+    }
+  );
+
+  server.registerTool(
+    "session_reconcile",
+    {
+      title: "Reconcile Workspace Activity",
+      description: "Record a safe workspace snapshot and activity gaps for changed files without storing raw content or diffs.",
+      inputSchema: {
+        project_id: z.string().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id }) => {
+      const project = sessionProject(root, project_id);
+      const result = reconcileWorkspaceActivity(root, project.projectRoot, project.projectId);
+      return textResult(JSON.stringify(result, null, 2), { ...result });
     }
   );
 

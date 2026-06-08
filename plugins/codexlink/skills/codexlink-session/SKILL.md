@@ -14,3 +14,5 @@ Rules:
 5. Do not push, tag, release, npm publish, or create a GitHub Release unless the user explicitly asks for that operation.
 6. Before ending work or handing back to ChatGPT, update the relevant handoff or append a short summary event with what changed, what was verified, and what remains.
 7. If an open handoff targets `codex`, acknowledge or complete it through the shared session instead of relying on chat memory.
+8. After creating, editing, deleting, or verifying files, record metadata through `session activity-add`, `session file-verify`, or `session reconcile`; prefer `session reconcile <projectId> --json` before task completion so changed files without activity are detected as gaps.
+9. Use `session file-verify <projectId> --path <path>` for safe text files when a hash/bytes/line-count proof is useful. Never store raw file content in session metadata.

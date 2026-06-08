@@ -7,6 +7,7 @@ import { bridgePath, getBridgeDir, resolveProjectRoot } from "./paths.js";
 import { readActiveProject } from "./activeProject.js";
 import { listProjects, projectIdFromRoot } from "./registry.js";
 import { bootstrapSession, getSessionSummary } from "./sessionStore.js";
+import { findWorkspaceActivityGaps } from "./workspaceActivity.js";
 
 export type DoctorStatus = "PASS" | "WARN" | "FAIL";
 
@@ -338,6 +339,25 @@ function gitRuntimeIgnoredCheck(root: string): DoctorCheck {
     : pass("runtime_git_status", ".agentbridge/sessions is not tracked or staged.");
 }
 
+function activityTraceCoverageCheck(root: string, projectId: string): DoctorCheck {
+  try {
+    const registered = listProjects(root).find((project) => project.id.toLowerCase() === projectId.toLowerCase());
+    const projectRoot = registered?.root ?? root;
+    const gaps = findWorkspaceActivityGaps(root, projectRoot, projectId);
+    if (gaps.length) {
+      const sample = gaps.slice(0, 5).map((file) => file.path).join(", ");
+      return warn(
+        "activity_trace_coverage",
+        `${gaps.length} changed file(s) do not have recent activity metadata${sample ? `: ${sample}` : "."}`,
+        `Run node dist/cli.js session reconcile ${projectId} --json.`
+      );
+    }
+    return pass("activity_trace_coverage", "Changed files have recent activity metadata or workspace is clean.");
+  } catch (error) {
+    return warn("activity_trace_coverage", `Could not check Activity Trace coverage: ${shortError(error)}`, "Run session reconcile manually.");
+  }
+}
+
 function securityOutputPolicyCheck(root: string): DoctorCheck {
   const inspectedFiles = PLUGIN_FILES.map((relativePath) => path.join(root, relativePath)).filter(pathExists);
   const content = inspectedFiles.map((file) => fs.readFileSync(file, "utf8")).join("\n");
@@ -357,6 +377,7 @@ export async function runDoctor(rootInput = process.cwd(), options: DoctorOption
     localTokenCheck(root),
     ...openApiChecks(root),
     ...sessionChecks(root, projectId),
+    activityTraceCoverageCheck(root, projectId),
     hookDryRunCheck(root, projectId),
     hookTrustReminder(),
     gitRuntimeIgnoredCheck(root),
