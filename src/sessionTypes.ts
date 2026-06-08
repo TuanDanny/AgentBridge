@@ -38,17 +38,31 @@ export type SessionEvidenceStatus = "seen" | "complete" | "partial" | "truncated
 export type SessionCheckType = "build" | "test" | "diff_check" | "workflow" | "git_status" | "smoke";
 export type SessionCheckStatus = "pass" | "fail" | "warning" | "unknown" | "skipped";
 export type SessionActivityStatus = "success" | "fail" | "warning" | "skipped" | "unknown";
-export type SessionActivitySource = "mcp" | "cli" | "http" | "gpt_actions" | "codex_plugin" | "doctor" | "smoke" | "script" | "system";
+export type SessionActivitySource =
+  | "mcp"
+  | "cli"
+  | "http"
+  | "gpt_actions"
+  | "codex_plugin"
+  | "doctor"
+  | "smoke"
+  | "script"
+  | "system"
+  | (string & {});
 export type SessionActivityKind =
   | "session_bootstrap"
   | "session_resume"
   | "session_summary_read"
+  | "session_goal_set"
   | "active_client_heartbeat"
   | "handoff_seen"
   | "handoff_added"
   | "handoff_update"
   | "handoff_acknowledged"
   | "handoff_done"
+  | "handoff_blocked"
+  | "handoff_cancelled"
+  | "handoff_superseded"
   | "file_create"
   | "file_edit"
   | "file_delete"

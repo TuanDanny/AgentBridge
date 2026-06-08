@@ -109,27 +109,20 @@ const EVIDENCE_STATUSES = new Set<SessionEvidenceStatus>(["seen", "complete", "p
 const CHECK_TYPES = new Set<SessionCheckType>(["build", "test", "diff_check", "workflow", "git_status", "smoke"]);
 const CHECK_STATUSES = new Set<SessionCheckStatus>(["pass", "fail", "warning", "unknown", "skipped"]);
 const ACTIVITY_STATUSES = new Set<SessionActivityStatus>(["success", "fail", "warning", "skipped", "unknown"]);
-const ACTIVITY_SOURCES = new Set<SessionActivitySource>([
-  "mcp",
-  "cli",
-  "http",
-  "gpt_actions",
-  "codex_plugin",
-  "doctor",
-  "smoke",
-  "script",
-  "system"
-]);
 const ACTIVITY_KINDS = new Set<SessionActivityKind>([
   "session_bootstrap",
   "session_resume",
   "session_summary_read",
+  "session_goal_set",
   "active_client_heartbeat",
   "handoff_seen",
   "handoff_added",
   "handoff_update",
   "handoff_acknowledged",
   "handoff_done",
+  "handoff_blocked",
+  "handoff_cancelled",
+  "handoff_superseded",
   "file_create",
   "file_edit",
   "file_delete",
@@ -228,6 +221,28 @@ export function bootstrapSession(
       `Bootstrap mode=${mode}; client=${client}; adapter=${adapter}; source=${source}.`
     );
     appendJsonLine(bundle.paths.events, event);
+    appendActivityRecord(
+      bundle,
+      projectId,
+      {
+        actor,
+        source: input.source ?? adapter,
+        kind: mode === "resume" ? "session_resume" : "session_bootstrap",
+        status: "success",
+        summary: `Session ${mode === "resume" ? "resumed" : "bootstrapped"} by ${client}/${adapter}.`,
+        related: { event_id: event.id },
+        metadata: {
+          client,
+          adapter,
+          mode,
+          bootstrap_event_created: true,
+          heartbeat_updated: true
+        }
+      },
+      revision,
+      state.revision,
+      revision
+    );
     state = updateStateForWrite(state, {
       revision,
       actor,
@@ -346,6 +361,29 @@ export function addSessionHandoff(
   appendJsonLine(bundle.paths.handoffs, handoff);
   const event = createSystemEvent(bundle.paths.events, revision, from, "handoff", `Handoff added: ${handoff.title}`, handoff.message);
   appendJsonLine(bundle.paths.events, event);
+  appendActivityRecord(
+    bundle,
+    projectId,
+    {
+      actor: from,
+      source: "system",
+      kind: "handoff_added",
+      status: "success",
+      summary: `Handoff added: ${handoff.title}`,
+      related: { event_id: event.id, handoff_id: handoff.id },
+      metadata: {
+        handoff_id: handoff.id,
+        title: handoff.title,
+        from,
+        to,
+        status_after: handoff.status,
+        message_stored: false
+      }
+    },
+    revision,
+    bundle.state.revision,
+    revision
+  );
   const state = updateStateForWrite(bundle.state, {
     revision,
     actor: from,
@@ -397,6 +435,32 @@ export function updateSessionHandoff(
     resultSummary.text
   );
   appendJsonLine(bundle.paths.events, event);
+  appendActivityRecord(
+    bundle,
+    projectId,
+    {
+      actor,
+      source: "system",
+      kind: handoffActivityKind(status),
+      status: status === "blocked" ? "warning" : status === "cancelled" ? "skipped" : "success",
+      summary: `Handoff ${handoffIdInput} ${current.status} -> ${status}.`,
+      related: { event_id: event.id, handoff_id: updated.id },
+      metadata: {
+        handoff_id: updated.id,
+        title: updated.title,
+        from: updated.from,
+        to: updated.to,
+        status_before: current.status,
+        status_after: status,
+        result_summary: resultSummary.text.trim() || null,
+        revision_before: bundle.state.revision,
+        revision_after: revision
+      }
+    },
+    revision,
+    bundle.state.revision,
+    revision
+  );
   const state = updateStateForWrite(bundle.state, {
     revision,
     actor,
@@ -427,6 +491,26 @@ export function setSessionGoal(
   const revision = bundle.state.revision + 1;
   const event = createSystemEvent(bundle.paths.events, revision, actor, "decision", "Session goal updated.", goal.text);
   appendJsonLine(bundle.paths.events, event);
+  appendActivityRecord(
+    bundle,
+    projectId,
+    {
+      actor,
+      source: "system",
+      kind: "session_goal_set",
+      status: "success",
+      summary: "Session goal updated.",
+      related: { event_id: event.id },
+      metadata: {
+        phase,
+        status,
+        goal_stored: true
+      }
+    },
+    revision,
+    bundle.state.revision,
+    revision
+  );
   const state = updateStateForWrite(
     {
       ...bundle.state,
@@ -490,6 +574,30 @@ export function appendSessionEvidence(
   };
 
   appendJsonLine(bundle.paths.evidence, evidence);
+  appendActivityRecord(
+    bundle,
+    projectId,
+    {
+      actor,
+      source,
+      kind: "evidence_recorded",
+      status: status === "error" ? "fail" : status === "blocked" ? "warning" : "success",
+      summary: `Evidence recorded: ${kind}/${status}`,
+      related: { evidence_id: evidence.id },
+      paths: evidence.path ? [evidence.path] : [],
+      metadata: {
+        evidence_id: evidence.id,
+        evidence_kind: kind,
+        evidence_source: source,
+        evidence_status: status,
+        path: evidence.path ?? null,
+        content_stored: false
+      }
+    },
+    revision,
+    bundle.state.revision,
+    revision
+  );
   const state = updateStateForWrite(bundle.state, {
     revision,
     actor,
@@ -542,6 +650,33 @@ export function appendSessionCheck(
   };
 
   appendJsonLine(bundle.paths.checks, check);
+  appendActivityRecord(
+    bundle,
+    projectId,
+    {
+      actor,
+      source: "system",
+      kind: "check_logged",
+      status: checkStatusToActivityStatus(status),
+      summary: `Check logged: ${type}/${status}`,
+      related: { check_id: check.id },
+      metadata: {
+        check_id: check.id,
+        type,
+        command: check.command ?? null,
+        status,
+        exit_code: check.exit_code ?? null,
+        duration_ms: check.duration_ms ?? null,
+        summary: check.summary,
+        output_stored: false,
+        redacted: check.redacted,
+        truncated: check.truncated
+      }
+    },
+    revision,
+    bundle.state.revision,
+    revision
+  );
   const state = updateStateForWrite(bundle.state, {
     revision,
     actor,
@@ -558,55 +693,16 @@ export function appendSessionActivity(
   input: AppendSessionActivityInput
 ): { ok: true; activity: SharedSessionActivity; summary: SharedSessionSummaryFile; revision: number } {
   const projectId = validateProjectId(projectIdInput);
-  const actor = validateActor(input.actor ?? "codex");
-  const source = validateActivitySource(input.source);
-  const kind = validateActivityKind(input.kind);
-  const status = validateActivityStatus(input.status ?? "success");
-  const summaryText = sanitizeSessionText(input.summary, SUMMARY_MAX);
-  if (!summaryText.text.trim()) {
-    throw new SessionStoreError("invalid_session_activity", "Session activity summary is required.");
-  }
-  const taskId = input.task_id ? sanitizeSessionText(input.task_id, METADATA_STRING_MAX) : undefined;
-  const correlationId = input.correlation_id ? sanitizeSessionText(input.correlation_id, METADATA_STRING_MAX) : undefined;
-  const paths = sanitizeSessionTextArray(input.paths ?? [], ARRAY_MAX, METADATA_STRING_MAX);
-  const metadata = sanitizeSessionMetadata(input.metadata ?? {});
-  const related = sanitizeActivityRelated(input.related);
-
   const bundle = readSessionBundle(registryRoot, projectId);
   assertExpectedRevision(bundle.state.revision, input.expected_revision);
-  const activityItems = readJsonLines<SharedSessionActivity>(bundle.paths.activity);
   const revision = bundle.state.revision + 1;
   const revisionBefore = validateOptionalRevision(input.revision_before, "revision_before") ?? bundle.state.revision;
   const revisionAfter = validateOptionalRevision(input.revision_after, "revision_after") ?? revision;
-  const activity: SharedSessionActivity = {
-    id: activityId(activityItems.length + 1),
-    seq: activityItems.length + 1,
-    revision,
-    time: new Date().toISOString(),
-    project_id: projectId,
-    session_id: bundle.session.session_id,
-    actor,
-    source,
-    kind,
-    status,
-    summary: summaryText.text.trim(),
-    ...(taskId?.text.trim() ? { task_id: taskId.text.trim() } : {}),
-    ...(correlationId?.text.trim() ? { correlation_id: correlationId.text.trim() } : {}),
-    revision_before: revisionBefore,
-    revision_after: revisionAfter,
-    ...(related.value ? { related: related.value } : {}),
-    paths: paths.values,
-    metadata: metadata.value,
-    redacted: Boolean(summaryText.redacted || taskId?.redacted || correlationId?.redacted || paths.redacted || metadata.redacted || related.redacted),
-    truncated: Boolean(
-      summaryText.truncated || taskId?.truncated || correlationId?.truncated || paths.truncated || metadata.truncated || related.truncated
-    )
-  };
+  const activity = appendActivityRecord(bundle, projectId, input, revision, revisionBefore, revisionAfter);
 
-  appendJsonLine(bundle.paths.activity, activity);
   const state = updateStateForWrite(bundle.state, {
     revision,
-    actor,
+    actor: activity.actor,
     warning:
       activity.redacted || activity.truncated
         ? "Some session activity metadata was redacted or truncated before storage."
@@ -1407,11 +1503,13 @@ function validateActivityKind(value: string): SessionActivityKind {
   return value as SessionActivityKind;
 }
 
-function validateActivitySource(value: string): SessionActivitySource {
-  if (!ACTIVITY_SOURCES.has(value as SessionActivitySource)) {
-    throw new SessionStoreError("invalid_activity_source", "Session activity source is not allowed.");
+function sanitizeActivitySource(value: string): { value: SessionActivitySource; redacted: boolean; truncated: boolean } {
+  const sanitized = sanitizeSessionText(value, SOURCE_MAX);
+  const source = sanitized.text.trim();
+  if (!source) {
+    throw new SessionStoreError("invalid_activity_source", "Session activity source is required.");
   }
-  return value as SessionActivitySource;
+  return { value: source as SessionActivitySource, redacted: sanitized.redacted, truncated: sanitized.truncated };
 }
 
 function validateActivityStatus(value: string): SessionActivityStatus {
@@ -1419,6 +1517,99 @@ function validateActivityStatus(value: string): SessionActivityStatus {
     throw new SessionStoreError("invalid_activity_status", "Session activity status is not allowed.");
   }
   return value as SessionActivityStatus;
+}
+
+function appendActivityRecord(
+  bundle: SessionBundle,
+  projectId: string,
+  input: AppendSessionActivityInput,
+  revision: number,
+  revisionBefore: number,
+  revisionAfter: number
+): SharedSessionActivity {
+  const actor = validateActor(input.actor ?? "codex");
+  const source = sanitizeActivitySource(input.source);
+  const kind = validateActivityKind(input.kind);
+  const status = validateActivityStatus(input.status ?? "success");
+  const summaryText = sanitizeSessionText(input.summary, SUMMARY_MAX);
+  if (!summaryText.text.trim()) {
+    throw new SessionStoreError("invalid_session_activity", "Session activity summary is required.");
+  }
+  const taskId = input.task_id ? sanitizeSessionText(input.task_id, METADATA_STRING_MAX) : undefined;
+  const correlationId = input.correlation_id ? sanitizeSessionText(input.correlation_id, METADATA_STRING_MAX) : undefined;
+  const paths = sanitizeSessionTextArray(input.paths ?? [], ARRAY_MAX, METADATA_STRING_MAX);
+  const metadata = sanitizeSessionMetadata(input.metadata ?? {});
+  const related = sanitizeActivityRelated(input.related);
+  const activityItems = readJsonLines<SharedSessionActivity>(bundle.paths.activity);
+  const activity: SharedSessionActivity = {
+    id: activityId(activityItems.length + 1),
+    seq: activityItems.length + 1,
+    revision,
+    time: new Date().toISOString(),
+    project_id: projectId,
+    session_id: bundle.session.session_id,
+    actor,
+    source: source.value,
+    kind,
+    status,
+    summary: summaryText.text.trim(),
+    ...(taskId?.text.trim() ? { task_id: taskId.text.trim() } : {}),
+    ...(correlationId?.text.trim() ? { correlation_id: correlationId.text.trim() } : {}),
+    revision_before: revisionBefore,
+    revision_after: revisionAfter,
+    ...(related.value ? { related: related.value } : {}),
+    paths: paths.values,
+    metadata: metadata.value,
+    redacted: Boolean(
+      summaryText.redacted || source.redacted || taskId?.redacted || correlationId?.redacted || paths.redacted || metadata.redacted || related.redacted
+    ),
+    truncated: Boolean(
+      summaryText.truncated ||
+        source.truncated ||
+        taskId?.truncated ||
+        correlationId?.truncated ||
+        paths.truncated ||
+        metadata.truncated ||
+        related.truncated
+    )
+  };
+  appendJsonLine(bundle.paths.activity, activity);
+  return activity;
+}
+
+function handoffActivityKind(status: SessionHandoffStatus): SessionActivityKind {
+  if (status === "acknowledged") {
+    return "handoff_acknowledged";
+  }
+  if (status === "done") {
+    return "handoff_done";
+  }
+  if (status === "blocked") {
+    return "handoff_blocked";
+  }
+  if (status === "cancelled") {
+    return "handoff_cancelled";
+  }
+  if (status === "superseded") {
+    return "handoff_superseded";
+  }
+  return "handoff_update";
+}
+
+function checkStatusToActivityStatus(status: SessionCheckStatus): SessionActivityStatus {
+  if (status === "pass") {
+    return "success";
+  }
+  if (status === "fail") {
+    return "fail";
+  }
+  if (status === "warning") {
+    return "warning";
+  }
+  if (status === "skipped") {
+    return "skipped";
+  }
+  return "unknown";
 }
 
 function countActivityKinds(activities: SharedSessionActivity[]): Record<string, number> {

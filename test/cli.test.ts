@@ -468,12 +468,15 @@ describe("compiled CLI smoke tests", () => {
         "--json"
       )
     );
-    expect(activity.activity.id).toBe("act_000001");
+    expect(activity.activity.id).toMatch(/^act_\d{6}$/);
     expect(activity.activity.summary).toContain("[REDACTED]");
     expect(activity.activity.metadata).not.toHaveProperty("content");
     expect(activity.activity.metadata).not.toHaveProperty("stdout");
     const recentActivity = JSON.parse(runCli(registryRoot, "session", "activity", "AgentBridge", "--json"));
     expect(recentActivity.activities.at(-1)).toMatchObject({ kind: "file_create", status: "success" });
+    expect(recentActivity.activities.some((item: { kind: string }) => item.kind === "handoff_added")).toBe(true);
+    expect(recentActivity.activities.some((item: { kind: string }) => item.kind === "handoff_acknowledged")).toBe(true);
+    expect(recentActivity.activities.some((item: { kind: string }) => item.kind === "check_logged")).toBe(true);
     expect(JSON.stringify(recentActivity)).not.toContain(token);
 
     const updates = JSON.parse(runCli(registryRoot, "session", "updates", "AgentBridge", "--since", "1", "--json"));

@@ -331,7 +331,7 @@ describe("shared session store", () => {
 
     const first = appendSessionActivity(root, projectId, {
       actor: "codex",
-      source: "cli",
+      source: "alpha_interactive_test",
       kind: "file_create",
       status: "success",
       summary: `Created file with OPENAI_API_KEY=${token}`,
@@ -365,6 +365,7 @@ describe("shared session store", () => {
 
     expect(first.activity.id).toBe("act_000001");
     expect(first.activity.seq).toBe(1);
+    expect(first.activity.source).toBe("alpha_interactive_test");
     expect(first.activity.revision_before).toBe(1);
     expect(first.activity.revision_after).toBe(2);
     expect(first.activity.summary).toContain("[REDACTED]");
@@ -399,6 +400,159 @@ describe("shared session store", () => {
     expect(serialized).not.toContain("RAW_TERMINAL_OUTPUT_SHOULD_NOT_STORE");
     expect(serialized).not.toContain("diff --git");
     expect(serialized).not.toContain("OPENAI_API_KEY=");
+  });
+
+  it("auto-instruments session workflow writes with compact activity metadata", () => {
+    const root = makeTempRoot();
+    const projectId = "AgentBridge";
+    const token = `sk-${"f".repeat(32)}`;
+
+    const bootstrap = bootstrapSession(root, projectId, {
+      actor: "codex",
+      client: "codex",
+      adapter: "cli",
+      source: `beta_interactive_test token=${token}`,
+      mode: "start"
+    });
+    expect(bootstrap.revision).toBe(2);
+    expect(bootstrap.recent_activity.at(-1)).toMatchObject({
+      kind: "session_bootstrap",
+      revision_before: 1,
+      revision_after: 2,
+      redacted: true
+    });
+
+    const beforeReadCount = getRecentActivity(root, projectId, 50).activities.length;
+    getSessionSummary(root, projectId);
+    getSessionUpdates(root, projectId, 0);
+    expect(getRecentActivity(root, projectId, 50).activities).toHaveLength(beforeReadCount);
+
+    const goal = setSessionGoal(root, projectId, {
+      actor: "codex",
+      goal: "Exercise v0.8-beta activity instrumentation.",
+      phase: "implementation",
+      status: "in_progress",
+      expected_revision: 2
+    });
+    expect(goal.summary.recent_activity.at(-1)).toMatchObject({
+      kind: "session_goal_set",
+      revision_before: 2,
+      revision_after: 3
+    });
+
+    const handoff = addSessionHandoff(root, projectId, {
+      from: "chatgpt",
+      to: "codex",
+      title: "Acknowledge beta activity handoff",
+      message: `Please acknowledge without leaking OPENAI_API_KEY=${token}`,
+      expected_revision: 3
+    });
+    expect(handoff.summary.recent_activity.at(-1)).toMatchObject({
+      kind: "handoff_added",
+      revision_before: 3,
+      revision_after: 4,
+      related: {
+        handoff_id: handoff.handoff.id
+      }
+    });
+
+    const acknowledged = updateSessionHandoff(root, projectId, handoff.handoff.id, {
+      actor: "codex",
+      status: "acknowledged",
+      result_summary: `Acknowledged with Bearer ${token}`,
+      expected_revision: 4
+    });
+    const handoffActivity = acknowledged.summary.recent_activity.at(-1);
+    expect(handoffActivity).toMatchObject({
+      kind: "handoff_acknowledged",
+      revision_before: 4,
+      revision_after: 5,
+      related: {
+        handoff_id: handoff.handoff.id
+      }
+    });
+    expect(handoffActivity?.metadata).toMatchObject({
+      status_before: "open",
+      status_after: "acknowledged"
+    });
+
+    const evidence = appendSessionEvidence(root, projectId, {
+      actor: "codex",
+      kind: "file_read",
+      source: "cli",
+      path: "src/sessionStore.ts",
+      status: "partial",
+      purpose: `Review token=${token}`,
+      metadata: {
+        bytes_returned: 123,
+        content: `RAW_CONTENT_SHOULD_NOT_STORE ${token}`,
+        query: `token=${token}`
+      },
+      expected_revision: 5
+    });
+    expect(evidence.summary.recent_activity.at(-1)).toMatchObject({
+      kind: "evidence_recorded",
+      revision_before: 5,
+      revision_after: 6,
+      related: {
+        evidence_id: evidence.evidence.id
+      }
+    });
+
+    const check = appendSessionCheck(root, projectId, {
+      actor: "codex",
+      type: "test",
+      command: `npm test --token=${token}`,
+      status: "pass",
+      exit_code: 0,
+      summary: `Tests passed with PASSWORD=${token}`,
+      duration_ms: 42,
+      expected_revision: 6
+    });
+    expect(check.summary.recent_activity.at(-1)).toMatchObject({
+      kind: "check_logged",
+      revision_before: 6,
+      revision_after: 7,
+      related: {
+        check_id: check.check.id
+      },
+      metadata: {
+        output_stored: false
+      }
+    });
+
+    const summary = getSessionSummary(root, projectId);
+    expect(summary.revision).toBe(7);
+    expect(summary.recent_activity.map((activity) => activity.kind)).toEqual([
+      "session_bootstrap",
+      "session_goal_set",
+      "handoff_added",
+      "handoff_acknowledged",
+      "evidence_recorded",
+      "check_logged"
+    ]);
+    expect(summary.activity_counts).toMatchObject({
+      session_bootstrap: 1,
+      session_goal_set: 1,
+      handoff_added: 1,
+      handoff_acknowledged: 1,
+      evidence_recorded: 1,
+      check_logged: 1
+    });
+
+    const updates = getSessionUpdates(root, projectId, 1);
+    expect(updates.activity.map((activity) => activity.kind)).toEqual(summary.recent_activity.map((activity) => activity.kind));
+
+    const sessionDir = path.join(root, ".agentbridge", "sessions", projectId, getOrCreateActiveSession(root, projectId).session.session_id);
+    const serialized = [
+      fs.readFileSync(path.join(sessionDir, "activity.jsonl"), "utf8"),
+      fs.readFileSync(path.join(sessionDir, "summary.json"), "utf8")
+    ].join("\n");
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain("OPENAI_API_KEY=");
+    expect(serialized).not.toContain("RAW_CONTENT_SHOULD_NOT_STORE");
+    expect(serialized).not.toContain("npm test --token=");
+    expect(serialized).toContain("[REDACTED]");
   });
 
   it("keeps session runtime files ignored by git", () => {
