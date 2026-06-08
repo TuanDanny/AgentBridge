@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { projectRootHint } from "./registry.js";
-import { appendSessionActivity, getSessionSummary } from "./sessionStore.js";
+import { appendSessionActivity, getRecentActivity, getSessionSummary } from "./sessionStore.js";
 import type { SharedSessionActivity, SharedSessionSummaryFile } from "./sessionTypes.js";
 
 export interface WorkspaceChangedFile {
@@ -70,6 +70,8 @@ export class WorkspaceActivityError extends Error {
 const MAX_CHANGED_FILES = 50;
 const MAX_DIFF_FILES = 40;
 const MAX_VERIFY_BYTES = 1024 * 1024;
+const GAP_ACTIVITY_LOOKBACK = 50;
+const MAX_GAP_ACTIVITIES = 8;
 const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
 const PRIVATE_EXTENSIONS = new Set([".pem", ".key", ".p12", ".pfx"]);
 const BINARY_EXTENSIONS = new Set([
@@ -160,55 +162,11 @@ export function reconcileWorkspaceActivity(
   projectId: string
 ): WorkspaceReconcileResult {
   const snapshot = createWorkspaceSnapshot(projectRoot, projectId);
-  const summaryBefore = getSessionSummary(registryRoot, projectId);
-  const activityPaths = recentActivityPaths(summaryBefore);
+  const activityPaths = workspaceActivityPaths(registryRoot, projectId);
   const unloggedChanges = snapshot.changed_files.filter((file) => !activityPaths.has(file.path));
   const activitiesWritten: SharedSessionActivity[] = [];
 
-  const snapshotActivity = appendSessionActivity(registryRoot, projectId, {
-    actor: "codex",
-    source: "cli",
-    kind: "workspace_snapshot",
-    status: snapshot.git_available ? "success" : "warning",
-    summary: snapshot.git_available
-      ? `Workspace snapshot: ${snapshot.changed_count} changed file(s).`
-      : "Workspace snapshot: git status unavailable.",
-    paths: snapshot.changed_files.map((file) => file.path),
-    metadata: {
-      branch: snapshot.branch,
-      clean: snapshot.clean,
-      changed_count: snapshot.changed_count,
-      staged_count: snapshot.staged_count,
-      unstaged_count: snapshot.unstaged_count,
-      untracked_count: snapshot.untracked_count,
-      changed_files_truncated: snapshot.changed_files_truncated,
-      changed_files: snapshot.changed_files,
-      raw_diff_stored: false,
-      content_stored: false,
-      warning: snapshot.warning ?? null
-    }
-  });
-  activitiesWritten.push(snapshotActivity.activity);
-
-  if (snapshot.git_available) {
-    const changedSummary = appendSessionActivity(registryRoot, projectId, {
-      actor: "codex",
-      source: "cli",
-      kind: "changed_files_summary",
-      status: snapshot.changed_count ? "warning" : "success",
-      summary: snapshot.changed_count ? `Changed files summary: ${snapshot.changed_count} file(s).` : "Changed files summary: clean workspace.",
-      paths: snapshot.changed_files.map((file) => file.path),
-      metadata: {
-        changed_count: snapshot.changed_count,
-        files: snapshot.changed_files,
-        raw_diff_stored: false,
-        content_stored: false
-      }
-    });
-    activitiesWritten.push(changedSummary.activity);
-  }
-
-  for (const change of unloggedChanges) {
+  for (const change of unloggedChanges.slice(0, MAX_GAP_ACTIVITIES)) {
     const gap = appendSessionActivity(registryRoot, projectId, {
       actor: "codex",
       source: "cli",
@@ -230,6 +188,71 @@ export function reconcileWorkspaceActivity(
     });
     activitiesWritten.push(gap.activity);
   }
+
+  if (unloggedChanges.length > MAX_GAP_ACTIVITIES) {
+    const aggregateGap = appendSessionActivity(registryRoot, projectId, {
+      actor: "codex",
+      source: "cli",
+      kind: "activity_gap_detected",
+      status: "warning",
+      summary: `Activity gaps detected for ${unloggedChanges.length} changed file(s).`,
+      paths: unloggedChanges.slice(0, MAX_CHANGED_FILES).map((file) => file.path),
+      metadata: {
+        gap_count: unloggedChanges.length,
+        emitted_individual_gaps: MAX_GAP_ACTIVITIES,
+        reason: "changed_files_without_recent_activity",
+        files: unloggedChanges.slice(0, MAX_CHANGED_FILES),
+        raw_diff_stored: false,
+        content_stored: false
+      }
+    });
+    activitiesWritten.push(aggregateGap.activity);
+  }
+
+  if (snapshot.git_available) {
+    const changedSummary = appendSessionActivity(registryRoot, projectId, {
+      actor: "codex",
+      source: "cli",
+      kind: "changed_files_summary",
+      status: snapshot.changed_count ? "warning" : "success",
+      summary: snapshot.changed_count ? `Changed files summary: ${snapshot.changed_count} file(s).` : "Changed files summary: clean workspace.",
+      paths: snapshot.changed_files.map((file) => file.path),
+      metadata: {
+        changed_count: snapshot.changed_count,
+        unlogged_count: unloggedChanges.length,
+        files: snapshot.changed_files,
+        raw_diff_stored: false,
+        content_stored: false
+      }
+    });
+    activitiesWritten.push(changedSummary.activity);
+  }
+
+  const snapshotActivity = appendSessionActivity(registryRoot, projectId, {
+    actor: "codex",
+    source: "cli",
+    kind: "workspace_snapshot",
+    status: snapshot.git_available ? "success" : "warning",
+    summary: snapshot.git_available
+      ? `Workspace snapshot: ${snapshot.changed_count} changed file(s).`
+      : "Workspace snapshot: git status unavailable.",
+    paths: snapshot.changed_files.map((file) => file.path),
+    metadata: {
+      branch: snapshot.branch,
+      clean: snapshot.clean,
+      changed_count: snapshot.changed_count,
+      staged_count: snapshot.staged_count,
+      unstaged_count: snapshot.unstaged_count,
+      untracked_count: snapshot.untracked_count,
+      changed_files_truncated: snapshot.changed_files_truncated,
+      changed_files: snapshot.changed_files,
+      unlogged_count: unloggedChanges.length,
+      raw_diff_stored: false,
+      content_stored: false,
+      warning: snapshot.warning ?? null
+    }
+  });
+  activitiesWritten.push(snapshotActivity.activity);
 
   return {
     ok: true,
@@ -338,7 +361,22 @@ export function findWorkspaceActivityGaps(registryRoot: string, projectRoot: str
   if (!snapshot.git_available) {
     return [];
   }
-  return snapshot.changed_files.filter((file) => !recentActivityPaths(getSessionSummary(registryRoot, projectId)).has(file.path));
+  return snapshot.changed_files.filter((file) => !workspaceActivityPaths(registryRoot, projectId).has(file.path));
+}
+
+function workspaceActivityPaths(registryRoot: string, projectId: string): Set<string> {
+  const summary = getSessionSummary(registryRoot, projectId);
+  const paths = recentActivityPaths(summary);
+  for (const activity of getRecentActivity(registryRoot, projectId, GAP_ACTIVITY_LOOKBACK).activities) {
+    for (const activityPath of activity.paths ?? []) {
+      paths.add(normalizePosix(activityPath));
+    }
+    const metadataPath = activity.metadata?.path;
+    if (typeof metadataPath === "string") {
+      paths.add(normalizePosix(metadataPath));
+    }
+  }
+  return paths;
 }
 
 function recentActivityPaths(summary: SharedSessionSummaryFile): Set<string> {
