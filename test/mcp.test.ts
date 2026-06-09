@@ -285,6 +285,13 @@ describe("MCP server", () => {
       summary: "CLI activity visible through MCP"
     });
     expect(activity.activities.at(-1)?.metadata).not.toHaveProperty("content");
+    const fileTimeline = firstJson<{ activities: Array<{ kind: string; paths: string[] }> }>(
+      await connected.client.callTool({
+        name: "session_timeline",
+        arguments: { project_id: projectId, file_path: "README.md", limit: 10 }
+      })
+    );
+    expect(fileTimeline.activities.some((item) => item.kind === "file_verify" && item.paths.includes("README.md"))).toBe(true);
 
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore", windowsHide: true });
     fs.writeFileSync(path.join(root, ".gitignore"), ".agentbridge/\n", "utf8");
@@ -352,6 +359,14 @@ describe("MCP server", () => {
     expect(getSessionSummary(root, projectId).open_handoffs.find((handoff) => handoff.id === httpLikeHandoff.handoff.id)?.status).toBe(
       "acknowledged"
     );
+    const handoffTimeline = firstJson<{ activities: Array<{ kind: string; related?: { handoff_id?: string } }> }>(
+      await connected.client.callTool({
+        name: "session_timeline",
+        arguments: { project_id: projectId, handoff_id: httpLikeHandoff.handoff.id }
+      })
+    );
+    expect(handoffTimeline.activities.some((item) => item.kind === "handoff_added")).toBe(true);
+    expect(handoffTimeline.activities.some((item) => item.kind === "handoff_acknowledged")).toBe(true);
 
     updateSessionHandoff(root, projectId, mcpHandoff.handoff.id, {
       actor: "chatgpt",
@@ -382,6 +397,15 @@ describe("MCP server", () => {
       phase: "review",
       current_status: "in_progress"
     });
+    const context = firstJson<{ current_goal: string; workspace: { recent_gaps: unknown[] }; recent_activity: Array<{ kind: string }> }>(
+      await connected.client.callTool({
+        name: "session_context",
+        arguments: { project_id: projectId, compact: true }
+      })
+    );
+    expect(context.current_goal).toBe("Test v0.6-gamma MCP session tools");
+    expect(context.recent_activity.length).toBeGreaterThan(0);
+    expect(context.workspace).toHaveProperty("recent_gaps");
 
     const check = firstJson<{ check: { type: string; status: string; summary: string; command?: string } }>(
       await connected.client.callTool({

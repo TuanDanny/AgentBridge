@@ -114,6 +114,10 @@ describe("CodexLink local plugin", () => {
     expect(skill).toContain("tokens");
     expect(skill).toContain("Do not push, tag, release");
     expect(skill).toContain("handoff");
+    expect(skill).toContain("session_context");
+    expect(skill).toContain("session_timeline");
+    expect(skill).toContain("session_reconcile");
+    expect(skill).toContain("task_complete");
   });
 
   it("runs SessionStart dry-run without printing secrets", () => {

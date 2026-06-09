@@ -145,11 +145,65 @@ const ACTIVITY_KINDS = new Set<SessionActivityKind>([
   "git_status_seen",
   "changed_files_summary",
   "activity_gap_detected",
+  "task_started",
+  "task_progress",
+  "task_complete",
+  "task_blocked",
   "secret_redacted",
   "raw_content_blocked",
   "content_truncated",
   "unsafe_path_blocked"
 ]);
+
+export type SessionTimelineMode = "recent" | "handoff" | "file" | "task";
+
+export interface SessionTimelineOptions {
+  mode?: SessionTimelineMode;
+  handoff_id?: string;
+  file_path?: string;
+  task_id?: string;
+  limit?: number;
+}
+
+export interface SessionTimelineResult {
+  ok: true;
+  project_id: string;
+  session_id: string;
+  mode: SessionTimelineMode;
+  filter: {
+    handoff_id?: string;
+    file_path?: string;
+    task_id?: string;
+  };
+  activities: SharedSessionActivity[];
+  has_more: boolean;
+  warnings: string[];
+}
+
+export interface SessionCompactContextResult {
+  ok: true;
+  project_id: string;
+  session_id: string;
+  revision: number;
+  current_goal: string;
+  phase: SessionPhase;
+  status: SessionCurrentStatus;
+  active_clients: SharedSessionActiveClient[];
+  open_handoffs: SharedSessionHandoff[];
+  recent_events: SharedSessionEvent[];
+  recent_evidence: SharedSessionEvidence[];
+  recent_checks: SharedSessionCheck[];
+  recent_activity: SharedSessionActivity[];
+  workspace: {
+    latest_snapshot: SharedSessionActivity | null;
+    latest_changed_files_summary: SharedSessionActivity | null;
+    recent_gaps: SharedSessionActivity[];
+    changed_count: number | null;
+    unlogged_count: number | null;
+  };
+  warnings: string[];
+  recommended_next_action: SessionRecommendedNextAction;
+}
 
 export class SessionStoreError extends Error {
   code: string;
@@ -793,6 +847,174 @@ export function getRecentActivity(
   };
 }
 
+export function getSessionTimeline(
+  registryRoot: string,
+  projectIdInput: string,
+  options: SessionTimelineOptions = {}
+): SessionTimelineResult {
+  const projectId = validateProjectId(projectIdInput);
+  const bundle = readSessionBundle(registryRoot, projectId);
+  const mode = resolveTimelineMode(options);
+  const limit = capTimelineLimit(options.limit);
+  const filter = timelineFilter(options);
+  let activities = readJsonLines<SharedSessionActivity>(bundle.paths.activity);
+  const warnings: string[] = [];
+
+  if (mode === "handoff") {
+    const handoffIdValue = requireFilterValue(filter.handoff_id, "handoff_id");
+    activities = activities.filter((activity) => activity.related?.handoff_id === handoffIdValue || activity.metadata?.handoff_id === handoffIdValue);
+  } else if (mode === "file") {
+    const filePath = normalizeTimelinePath(requireFilterValue(filter.file_path, "file_path"));
+    filter.file_path = filePath;
+    activities = activities.filter((activity) => activityMatchesPath(activity, filePath));
+  } else if (mode === "task") {
+    const taskId = requireFilterValue(filter.task_id, "task_id");
+    activities = activities.filter(
+      (activity) => activity.task_id === taskId || activity.correlation_id === taskId || activity.metadata?.task_id === taskId
+    );
+  }
+
+  const hasMore = activities.length > limit;
+  if (hasMore) {
+    warnings.push("Timeline was capped to the requested limit.");
+  }
+
+  return {
+    ok: true,
+    project_id: projectId,
+    session_id: bundle.session.session_id,
+    mode,
+    filter,
+    activities: activities.slice(-limit),
+    has_more: hasMore,
+    warnings
+  };
+}
+
+export function getSessionCompactContext(registryRoot: string, projectIdInput: string): SessionCompactContextResult {
+  const summary = getSessionSummary(registryRoot, projectIdInput);
+  const timeline = getSessionTimeline(registryRoot, summary.project_id, { mode: "recent", limit: 30 });
+  const latestSnapshot = latestActivity(timeline.activities, "workspace_snapshot");
+  const latestChangedSummary = latestActivity(timeline.activities, "changed_files_summary");
+  const recentGaps = timeline.activities.filter((activity) => activity.kind === "activity_gap_detected").slice(-5);
+  const warnings = [...summary.warnings];
+  if (recentGaps.length) {
+    warnings.push("Recent workspace activity gaps exist. Run session reconcile after file changes and review affected paths.");
+  }
+  if (!latestSnapshot) {
+    warnings.push("No recent workspace_snapshot activity is available. Run session reconcile for workspace context.");
+  }
+
+  return {
+    ok: true,
+    project_id: summary.project_id,
+    session_id: summary.session_id,
+    revision: summary.revision,
+    current_goal: summary.current_goal,
+    phase: summary.phase,
+    status: summary.current_status,
+    active_clients: summary.active_clients,
+    open_handoffs: summary.open_handoffs,
+    recent_events: summary.recent_events,
+    recent_evidence: summary.recent_evidence,
+    recent_checks: summary.recent_checks,
+    recent_activity: summary.recent_activity,
+    workspace: {
+      latest_snapshot: latestSnapshot,
+      latest_changed_files_summary: latestChangedSummary,
+      recent_gaps: recentGaps,
+      changed_count: metadataNumber(latestSnapshot?.metadata.changed_count ?? latestChangedSummary?.metadata.changed_count),
+      unlogged_count: metadataNumber(latestSnapshot?.metadata.unlogged_count ?? latestChangedSummary?.metadata.unlogged_count)
+    },
+    warnings: [...new Set(warnings)].slice(-WARNING_MAX),
+    recommended_next_action: recommendedNextAction(summary)
+  };
+}
+
+function resolveTimelineMode(options: SessionTimelineOptions): SessionTimelineMode {
+  if (options.mode) {
+    return options.mode;
+  }
+  if (options.handoff_id) {
+    return "handoff";
+  }
+  if (options.file_path) {
+    return "file";
+  }
+  if (options.task_id) {
+    return "task";
+  }
+  return "recent";
+}
+
+function timelineFilter(options: SessionTimelineOptions): SessionTimelineResult["filter"] {
+  return {
+    ...(options.handoff_id ? { handoff_id: sanitizeTimelineToken(options.handoff_id, "handoff_id") } : {}),
+    ...(options.file_path ? { file_path: options.file_path } : {}),
+    ...(options.task_id ? { task_id: sanitizeTimelineToken(options.task_id, "task_id") } : {})
+  };
+}
+
+function requireFilterValue(value: string | undefined, name: string): string {
+  if (!value?.trim()) {
+    throw new SessionStoreError("invalid_query", `${name} is required for this timeline mode.`);
+  }
+  return value.trim();
+}
+
+function sanitizeTimelineToken(value: string, label: string): string {
+  const sanitized = sanitizeSessionText(value, METADATA_STRING_MAX);
+  const token = sanitized.text.trim();
+  if (!token) {
+    throw new SessionStoreError("invalid_query", `${label} cannot be empty.`);
+  }
+  return token;
+}
+
+function capTimelineLimit(value: number | undefined): number {
+  if (value === undefined) {
+    return 20;
+  }
+  if (!Number.isInteger(value) || value < 1) {
+    throw new SessionStoreError("invalid_query", "limit must be a positive integer.");
+  }
+  return Math.min(value, 100);
+}
+
+function normalizeTimelinePath(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new SessionStoreError("invalid_query", "file path is required.");
+  }
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(trimmed) || path.isAbsolute(trimmed) || trimmed.includes(":")) {
+    throw new SessionStoreError("invalid_query", "file path must be project-relative.");
+  }
+  const parts = trimmed.split(/[\\/]+/);
+  if (parts.some((part) => part === ".." || part === "")) {
+    throw new SessionStoreError("invalid_query", "file path must not contain traversal or empty segments.");
+  }
+  return normalizeTimelinePathSeparators(path.normalize(parts.join(path.sep)));
+}
+
+function activityMatchesPath(activity: SharedSessionActivity, filePath: string): boolean {
+  const target = normalizeTimelinePathSeparators(filePath).toLowerCase();
+  const paths = activity.paths.map((item) => normalizeTimelinePathSeparators(item).toLowerCase());
+  const metadataPath = typeof activity.metadata.path === "string" ? normalizeTimelinePathSeparators(activity.metadata.path).toLowerCase() : "";
+  return paths.includes(target) || metadataPath === target;
+}
+
+function normalizeTimelinePathSeparators(input: string): string {
+  return input.split(path.sep).join("/").replace(/\\/g, "/");
+}
+
+function latestActivity(activities: SharedSessionActivity[], kind: SessionActivityKind): SharedSessionActivity | null {
+  return [...activities].reverse().find((activity) => activity.kind === kind) ?? null;
+}
+
+function metadataNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export function getActivitySinceRevision(
   registryRoot: string,
   projectIdInput: string,
@@ -901,6 +1123,59 @@ export function formatSessionSummary(summary: SharedSessionSummaryFile): string 
       : ["- None"])
   ];
   return lines.join("\n");
+}
+
+export function formatSessionTimeline(result: SessionTimelineResult): string {
+  return [
+    `Session timeline: ${result.project_id}`,
+    `Mode: ${result.mode}`,
+    ...(result.filter.handoff_id ? [`Handoff: ${result.filter.handoff_id}`] : []),
+    ...(result.filter.file_path ? [`File: ${result.filter.file_path}`] : []),
+    ...(result.filter.task_id ? [`Task: ${result.filter.task_id}`] : []),
+    "",
+    ...(result.activities.length
+      ? result.activities.map((activity) => {
+          const related = activity.related?.handoff_id ? ` handoff=${activity.related.handoff_id}` : "";
+          const paths = activity.paths.length ? ` paths=${activity.paths.join(",")}` : "";
+          return `- r${activity.revision} ${activity.id} ${activity.actor}/${activity.kind}/${activity.status}${related}${paths}: ${activity.summary}`;
+        })
+      : ["- None"]),
+    ...(result.warnings.length ? ["", "Warnings:", ...result.warnings.map((warning) => `- ${warning}`)] : [])
+  ].join("\n");
+}
+
+export function formatSessionCompactContext(result: SessionCompactContextResult): string {
+  return [
+    `Session compact context: ${result.project_id}`,
+    `Session: ${result.session_id}`,
+    `Revision: ${result.revision}`,
+    `Goal: ${result.current_goal}`,
+    `Phase: ${result.phase}`,
+    `Status: ${result.status}`,
+    `Recommended next action: ${result.recommended_next_action}`,
+    "",
+    "Workspace:",
+    `- changed_count: ${result.workspace.changed_count ?? "unknown"}`,
+    `- unlogged_count: ${result.workspace.unlogged_count ?? "unknown"}`,
+    `- latest_snapshot: ${result.workspace.latest_snapshot ? `${result.workspace.latest_snapshot.id} r${result.workspace.latest_snapshot.revision}` : "none"}`,
+    `- recent_gaps: ${result.workspace.recent_gaps.length}`,
+    "",
+    "Open handoffs:",
+    ...(result.open_handoffs.length
+      ? result.open_handoffs.map((handoff) => `- ${handoff.id} [${handoff.status}] ${handoff.title}`)
+      : ["- None"]),
+    "",
+    "Recent activity:",
+    ...(result.recent_activity.length
+      ? result.recent_activity.map((activity) => `- r${activity.revision} ${activity.kind}/${activity.status}: ${activity.summary}`)
+      : ["- None"]),
+    "",
+    "Recent checks:",
+    ...(result.recent_checks.length
+      ? result.recent_checks.map((check) => `- r${check.revision} ${check.type}/${check.status}: ${check.summary}`)
+      : ["- None"]),
+    ...(result.warnings.length ? ["", "Warnings:", ...result.warnings.map((warning) => `- ${warning}`)] : [])
+  ].join("\n");
 }
 
 export function formatSessionBootstrap(result: SessionBootstrapResult): string {
@@ -1644,6 +1919,12 @@ function activityWarnings(existingWarnings: string[], recentActivity: SharedSess
   const warnings = [...existingWarnings];
   if (recentActivity.some((activity) => activity.redacted || activity.truncated)) {
     const warning = "Some recent activity metadata was redacted or truncated.";
+    if (!warnings.includes(warning)) {
+      warnings.push(warning);
+    }
+  }
+  if (recentActivity.some((activity) => activity.kind === "activity_gap_detected")) {
+    const warning = "Recent workspace activity gaps were detected. Run session reconcile after file changes.";
     if (!warnings.includes(warning)) {
       warnings.push(warning);
     }

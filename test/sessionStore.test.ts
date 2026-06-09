@@ -15,7 +15,9 @@ import {
   getRecentChecks,
   getRecentEvidence,
   getOrCreateActiveSession,
+  getSessionCompactContext,
   getSessionSummary,
+  getSessionTimeline,
   getSessionUpdates,
   setSessionGoal,
   updateSessionHandoff
@@ -553,6 +555,88 @@ describe("shared session store", () => {
     expect(serialized).not.toContain("RAW_CONTENT_SHOULD_NOT_STORE");
     expect(serialized).not.toContain("npm test --token=");
     expect(serialized).toContain("[REDACTED]");
+  });
+
+  it("builds filtered timelines and compact context without raw content", () => {
+    const root = makeTempRoot();
+    const projectId = "AgentBridge";
+    bootstrapSession(root, projectId, { actor: "codex", client: "codex", adapter: "cli", source: "timeline_test" });
+    setSessionGoal(root, projectId, {
+      actor: "codex",
+      goal: "Exercise v0.8-delta timeline context.",
+      phase: "implementation",
+      status: "in_progress"
+    });
+    const handoff = addSessionHandoff(root, projectId, {
+      from: "chatgpt",
+      to: "codex",
+      title: "Timeline handoff",
+      message: "Metadata only."
+    });
+    updateSessionHandoff(root, projectId, handoff.handoff.id, {
+      actor: "codex",
+      status: "acknowledged",
+      result_summary: "Acknowledged."
+    });
+    appendSessionActivity(root, projectId, {
+      actor: "codex",
+      source: "cli",
+      kind: "file_verify",
+      status: "success",
+      summary: "Verified README metadata.",
+      task_id: "task-delta",
+      paths: ["README.md"],
+      metadata: {
+        path: "README.md",
+        bytes: 12,
+        content: "RAW_CONTENT_SHOULD_NOT_STORE"
+      }
+    });
+    appendSessionActivity(root, projectId, {
+      actor: "codex",
+      source: "cli",
+      kind: "workspace_snapshot",
+      status: "success",
+      summary: "Workspace snapshot: 1 changed file.",
+      paths: ["README.md"],
+      metadata: {
+        changed_count: 1,
+        unlogged_count: 0,
+        raw_diff_stored: false,
+        content_stored: false
+      }
+    });
+    const taskComplete = appendSessionActivity(root, projectId, {
+      actor: "codex",
+      source: "cli",
+      kind: "task_complete",
+      status: "success",
+      summary: "Task complete metadata recorded.",
+      task_id: "task-delta",
+      metadata: {
+        raw_output: "terminal output should not store",
+        result: "done"
+      }
+    });
+
+    const handoffTimeline = getSessionTimeline(root, projectId, { handoff_id: handoff.handoff.id });
+    expect(handoffTimeline.activities.map((activity) => activity.kind)).toEqual(["handoff_added", "handoff_acknowledged"]);
+
+    const fileTimeline = getSessionTimeline(root, projectId, { file_path: "README.md" });
+    expect(fileTimeline.activities.some((activity) => activity.kind === "file_verify")).toBe(true);
+    expect(fileTimeline.activities.some((activity) => activity.kind === "workspace_snapshot")).toBe(true);
+
+    const taskTimeline = getSessionTimeline(root, projectId, { task_id: "task-delta" });
+    expect(taskTimeline.activities.map((activity) => activity.kind)).toEqual(["file_verify", "task_complete"]);
+    expect(taskTimeline.activities.at(-1)?.id).toBe(taskComplete.activity.id);
+
+    const context = getSessionCompactContext(root, projectId);
+    expect(context.workspace.latest_snapshot?.kind).toBe("workspace_snapshot");
+    expect(context.workspace.changed_count).toBe(1);
+    expect(context.recommended_next_action).toBe("continue_current_goal");
+    const serialized = JSON.stringify({ handoffTimeline, fileTimeline, taskTimeline, context });
+    expect(serialized).not.toContain("RAW_CONTENT_SHOULD_NOT_STORE");
+    expect(serialized).not.toContain("terminal output should not store");
   });
 
   it("keeps session runtime files ignored by git", () => {

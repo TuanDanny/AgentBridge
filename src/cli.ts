@@ -80,15 +80,19 @@ import {
   appendSessionEvidence,
   appendSessionEvent,
   bootstrapSession,
+  formatSessionCompactContext,
   formatSessionBootstrap,
   formatSessionHandoffs,
   formatSessionSummary,
+  formatSessionTimeline,
   formatSessionUpdates,
+  getSessionCompactContext,
   getOrCreateActiveSession,
   getRecentChecks,
   getRecentActivity,
   getRecentEvidence,
   getSessionSummary,
+  getSessionTimeline,
   getSessionUpdates,
   listSessionHandoffs,
   setSessionGoal,
@@ -762,26 +766,90 @@ session
   .description("List recent shared session activity timeline metadata.")
   .argument("<projectId>", "safe project id")
   .option("--recent", "show recent activity timeline", true)
+  .option("--task <taskId>", "filter activity by task id or correlation id")
+  .option("--handoff <handoffId>", "filter activity by related handoff id")
+  .option("--file <path>", "filter activity by project-relative file path")
+  .option("--kind <kind>", "filter activity by kind")
   .option("--limit <count>", "maximum activity entries", "10")
   .option("--json", "print JSON result")
-  .action((projectId: string, options: { recent?: boolean; limit: string; json?: boolean }) => {
+  .action(
+    (
+      projectId: string,
+      options: { recent?: boolean; task?: string; handoff?: string; file?: string; kind?: string; limit: string; json?: boolean }
+    ) => {
     try {
       const resolvedProjectId = resolveCliSessionProject(projectId);
       const limit = parseNonNegativeIntegerOption(options.limit, "--limit");
-      const result = getRecentActivity(process.cwd(), resolvedProjectId, limit || 10);
+      const result =
+        options.task || options.handoff || options.file
+          ? getSessionTimeline(process.cwd(), resolvedProjectId, {
+              task_id: options.task,
+              handoff_id: options.handoff,
+              file_path: options.file,
+              limit: limit || 10
+            })
+          : getRecentActivity(process.cwd(), resolvedProjectId, limit || 10);
+      const activities = "activities" in result ? result.activities.filter((item) => (options.kind ? item.kind === options.kind : true)) : [];
       if (options.json) {
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify({ ...result, activities }, null, 2));
         return;
       }
       console.log(
         [
           `Session activity: ${resolvedProjectId}`,
           "",
-          ...(result.activities.length
-            ? result.activities.map((item) => `- r${item.revision} ${item.actor}/${item.kind}/${item.status}: ${item.summary}`)
+          ...(activities.length
+            ? activities.map((item) => `- r${item.revision} ${item.actor}/${item.kind}/${item.status}: ${item.summary}`)
             : ["- None"])
         ].join("\n")
       );
+    } catch (error) {
+      handleError(error);
+    }
+  }
+  );
+
+session
+  .command("timeline")
+  .description("Build a redacted Activity Trace timeline by recent activity, handoff, task, or file.")
+  .argument("<projectId>", "safe project id")
+  .option("--recent", "show recent timeline", true)
+  .option("--handoff <handoffId>", "timeline for a handoff id")
+  .option("--task <taskId>", "timeline for a task id or correlation id")
+  .option("--file <path>", "timeline for a project-relative file path")
+  .option("--limit <count>", "maximum activity entries", "20")
+  .option("--json", "print JSON result")
+  .action(
+    (
+      projectId: string,
+      options: { recent?: boolean; handoff?: string; task?: string; file?: string; limit: string; json?: boolean }
+    ) => {
+      try {
+        const resolvedProjectId = resolveCliSessionProject(projectId);
+        const result = getSessionTimeline(process.cwd(), resolvedProjectId, {
+          handoff_id: options.handoff,
+          task_id: options.task,
+          file_path: options.file,
+          limit: parseNonNegativeIntegerOption(options.limit, "--limit") || 20
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionTimeline(result));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
+
+session
+  .command("context")
+  .description("Return compact local memory context for resuming Codex/GPT work.")
+  .argument("<projectId>", "safe project id")
+  .option("--compact", "return compact context", true)
+  .option("--json", "print JSON result")
+  .action((projectId: string, options: { compact?: boolean; json?: boolean }) => {
+    try {
+      const resolvedProjectId = resolveCliSessionProject(projectId);
+      const result = getSessionCompactContext(process.cwd(), resolvedProjectId);
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatSessionCompactContext(result));
     } catch (error) {
       handleError(error);
     }

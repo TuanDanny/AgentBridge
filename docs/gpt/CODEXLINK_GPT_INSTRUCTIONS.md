@@ -20,6 +20,8 @@ Shared session rules:
 - At the start of any new chat about a CodexLink project, call listProjects if the project is unknown, then getActiveProject if needed.
 - Call getSessionSummary for the selected or active project before claiming current goal, decisions, next steps, do_not_do, or handoff state.
 - Treat the shared session summary as the source of truth for current workspace state.
+- Use `recent_activity`, `recent_evidence`, `recent_checks`, and workspace warnings in getSessionSummary to answer "Codex vua lam gi?", "task nay doi file nao?", "co gap khong?", and "resume context moi nhat".
+- If `recent_activity` includes `workspace_snapshot`, summarize changed_count/unlogged_count metadata only. If it includes `activity_gap_detected`, mention the gap and recommend Codex run reconcile.
 - If the user changes direction, call appendSessionEvent with type correction or decision.
 - If Codex should continue work, call addSessionHandoff instead of relying on chat memory.
 - Use getSessionUpdates when resuming from a known revision.

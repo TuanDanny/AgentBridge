@@ -46,6 +46,7 @@ describe("workspace activity and reconcile", () => {
     const summary = getSessionSummary(root, "AgentAI");
     expect(summary.recent_activity.some((activity) => activity.kind === "workspace_snapshot")).toBe(true);
     expect(summary.recent_activity.some((activity) => activity.kind === "activity_gap_detected" && activity.paths.includes("kiemtrasuco.txt"))).toBe(true);
+    expect(summary.warnings).toContain("Recent workspace activity gaps were detected. Run session reconcile after file changes.");
 
     const sessionDir = path.join(root, ".agentbridge", "sessions", "AgentAI", summary.session_id);
     const activityText = fs.readFileSync(path.join(sessionDir, "activity.jsonl"), "utf8");

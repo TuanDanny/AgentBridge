@@ -14,8 +14,10 @@ import {
   appendSessionEvent,
   bootstrapSession,
   getActivitySinceRevision,
+  getSessionCompactContext,
   getOrCreateActiveSession,
   getRecentActivity,
+  getSessionTimeline,
   getSessionSummary,
   getSessionUpdates,
   listSessionHandoffs,
@@ -118,6 +120,10 @@ const sessionActivityKindSchema = z.enum([
   "git_status_seen",
   "changed_files_summary",
   "activity_gap_detected",
+  "task_started",
+  "task_progress",
+  "task_complete",
+  "task_blocked",
   "secret_redacted",
   "raw_content_blocked",
   "content_truncated",
@@ -331,6 +337,60 @@ export function createAgentBridgeMcpServer(rootInput = process.cwd()): McpServer
       const activities = (result.activities ?? []).filter((activity) => (kind ? activity.kind === kind : true));
       const structured = { ...result, activities };
       return textResult(JSON.stringify(structured, null, 2), structured);
+    }
+  );
+
+  server.registerTool(
+    "session_timeline",
+    {
+      title: "Get Shared Session Timeline",
+      description: "Return a redacted Activity Trace timeline filtered by recent activity, handoff, task, or file.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        handoff_id: z.string().optional(),
+        task_id: z.string().optional(),
+        file_path: z.string().optional(),
+        limit: z.number().int().min(1).max(100).default(20)
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id, handoff_id, task_id, file_path, limit }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = getSessionTimeline(root, projectId, {
+        handoff_id,
+        task_id,
+        file_path,
+        limit
+      });
+      return textResult(JSON.stringify(result, null, 2), { ...result });
+    }
+  );
+
+  server.registerTool(
+    "session_context",
+    {
+      title: "Get Shared Session Compact Context",
+      description: "Return compact local memory context for resuming Codex/GPT work without raw content.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        compact: z.boolean().default(true)
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ project_id }) => {
+      const projectId = sessionProjectId(root, project_id);
+      const result = getSessionCompactContext(root, projectId);
+      return textResult(JSON.stringify(result, null, 2), { ...result });
     }
   );
 

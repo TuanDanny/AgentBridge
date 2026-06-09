@@ -55,11 +55,23 @@ describe("CodexLink setup doctor", () => {
     const root = makeTempRoot();
     const result = await runDoctor(root, { projectId: "DoctorProject" });
     const tunnel = result.checks.find((check) => check.name === "tunnel_health");
+    const names = result.checks.map((check) => check.name);
     expect(result.ok).toBe(true);
     expect(tunnel).toMatchObject({
       status: "WARN"
     });
     expect(tunnel?.message).toContain("No remote_bridge");
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "recent_activity",
+        "activity_freshness",
+        "workspace_snapshot_health",
+        "summary_compactness",
+        "runtime_raw_content_scan"
+      ])
+    );
+    expect(result.checks.find((check) => check.name === "summary_compactness")?.status).toBe("PASS");
+    expect(result.checks.find((check) => check.name === "runtime_raw_content_scan")?.status).toBe("PASS");
   });
 
   it("diagnoses common setup failures with actionable messages", () => {

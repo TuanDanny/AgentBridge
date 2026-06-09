@@ -479,6 +479,35 @@ describe("compiled CLI smoke tests", () => {
     expect(recentActivity.activities.some((item: { kind: string }) => item.kind === "check_logged")).toBe(true);
     expect(JSON.stringify(recentActivity)).not.toContain(token);
 
+    const fileTimeline = JSON.parse(runCli(registryRoot, "session", "timeline", "AgentBridge", "--file", "notes/activity.txt", "--json"));
+    expect(fileTimeline.activities.some((item: { kind: string }) => item.kind === "file_create")).toBe(true);
+    const handoffTimeline = JSON.parse(runCli(registryRoot, "session", "timeline", "AgentBridge", "--handoff", handoff.handoff.id, "--json"));
+    expect(handoffTimeline.activities.some((item: { kind: string }) => item.kind === "handoff_added")).toBe(true);
+    expect(handoffTimeline.activities.some((item: { kind: string }) => item.kind === "handoff_acknowledged")).toBe(true);
+    const taskActivity = JSON.parse(
+      runCli(
+        registryRoot,
+        "session",
+        "activity-add",
+        "AgentBridge",
+        "--kind",
+        "task_complete",
+        "--status",
+        "success",
+        "--summary",
+        "CLI task complete marker",
+        "--task-id",
+        "cli-task-1",
+        "--json"
+      )
+    );
+    expect(taskActivity.activity.kind).toBe("task_complete");
+    const taskTimeline = JSON.parse(runCli(registryRoot, "session", "timeline", "AgentBridge", "--task", "cli-task-1", "--json"));
+    expect(taskTimeline.activities.at(-1)).toMatchObject({ kind: "task_complete", task_id: "cli-task-1" });
+    const context = JSON.parse(runCli(registryRoot, "session", "context", "AgentBridge", "--compact", "--json"));
+    expect(context.recent_activity.length).toBeGreaterThan(0);
+    expect(context.workspace).toHaveProperty("recent_gaps");
+
     const updates = JSON.parse(runCli(registryRoot, "session", "updates", "AgentBridge", "--since", "1", "--json"));
     expect(updates.events.length).toBeGreaterThan(0);
     expect(updates.checks.some((item: { type: string; status: string }) => item.type === "test" && item.status === "pass")).toBe(true);

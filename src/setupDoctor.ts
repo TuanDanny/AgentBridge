@@ -6,7 +6,7 @@ import { ensureDir, pathExists, readJsonIfExists, writeText } from "./fsx.js";
 import { bridgePath, getBridgeDir, resolveProjectRoot } from "./paths.js";
 import { readActiveProject } from "./activeProject.js";
 import { listProjects, projectIdFromRoot } from "./registry.js";
-import { bootstrapSession, getSessionSummary } from "./sessionStore.js";
+import { bootstrapSession, getRecentActivity, getSessionCompactContext, getSessionSummary } from "./sessionStore.js";
 import { findWorkspaceActivityGaps } from "./workspaceActivity.js";
 
 export type DoctorStatus = "PASS" | "WARN" | "FAIL";
@@ -358,6 +358,75 @@ function activityTraceCoverageCheck(root: string, projectId: string): DoctorChec
   }
 }
 
+function recentActivityExistsCheck(root: string, projectId: string): DoctorCheck {
+  try {
+    const activity = getRecentActivity(root, projectId, 10).activities;
+    return activity.length
+      ? pass("recent_activity", `Recent activity exists (${activity.length} item(s)).`)
+      : warn("recent_activity", "No recent activity metadata exists for this project.", `Run node dist/cli.js session bootstrap ${projectId} --json.`);
+  } catch (error) {
+    return warn("recent_activity", `Could not read recent activity: ${shortError(error)}`, "Run session summary manually.");
+  }
+}
+
+function staleActivityCheck(root: string, projectId: string): DoctorCheck {
+  try {
+    const latest = getRecentActivity(root, projectId, 1).activities.at(-1);
+    if (!latest) {
+      return warn("activity_freshness", "No activity timestamp exists.", `Run node dist/cli.js session bootstrap ${projectId} --json.`);
+    }
+    const ageMs = Date.now() - Date.parse(latest.time);
+    if (!Number.isFinite(ageMs)) {
+      return warn("activity_freshness", "Latest activity timestamp could not be parsed.", "Inspect session activity manually.");
+    }
+    const ageHours = ageMs / (60 * 60 * 1000);
+    return ageHours > 24
+      ? warn("activity_freshness", "Latest activity is older than 24 hours.", `Run node dist/cli.js session context ${projectId} --compact.`)
+      : pass("activity_freshness", "Latest activity is fresh.");
+  } catch (error) {
+    return warn("activity_freshness", `Could not check activity freshness: ${shortError(error)}`, "Run session activity manually.");
+  }
+}
+
+function workspaceSnapshotHealthCheck(root: string, projectId: string): DoctorCheck {
+  try {
+    const context = getSessionCompactContext(root, projectId);
+    const snapshot = context.workspace.latest_snapshot;
+    if (!snapshot) {
+      return warn("workspace_snapshot_health", "No recent workspace_snapshot activity is available.", `Run node dist/cli.js session reconcile ${projectId} --json.`);
+    }
+    const changedCount = context.workspace.changed_count ?? "unknown";
+    const unloggedCount = context.workspace.unlogged_count ?? "unknown";
+    return pass("workspace_snapshot_health", `Latest workspace snapshot found; changed=${changedCount}, unlogged=${unloggedCount}.`);
+  } catch (error) {
+    return warn("workspace_snapshot_health", `Could not inspect compact context: ${shortError(error)}`, "Run session context manually.");
+  }
+}
+
+function summaryCompactnessCheck(root: string, projectId: string): DoctorCheck {
+  try {
+    const context = getSessionCompactContext(root, projectId);
+    const serialized = JSON.stringify(context);
+    if (serialized.length > 60000) {
+      return warn("summary_compactness", "Compact context is larger than expected.", "Review recent activity metadata for noisy paths or oversized summaries.");
+    }
+    return pass("summary_compactness", "Compact context is bounded and parseable.");
+  } catch (error) {
+    return warn("summary_compactness", `Could not build compact context: ${shortError(error)}`, "Run session context manually.");
+  }
+}
+
+function runtimeRawContentLeakCheck(root: string): DoctorCheck {
+  const sessionRoot = bridgePath(root, "sessions");
+  if (!pathExists(sessionRoot)) {
+    return pass("runtime_raw_content_scan", "No session runtime directory exists yet.");
+  }
+  const suspicious = scanRuntimeFiles(sessionRoot, /\.(json|jsonl)$/i, /(diff --git|@@\s|BEGIN (?:RSA |OPENSSH |PRIVATE )?KEY|OPENAI_API_KEY\s*=|Bearer\s+(?!\[REDACTED\])\S{12,})/i, 30);
+  return suspicious.length
+    ? fail("runtime_raw_content_scan", "Session runtime metadata contains raw diff/key/token-like text.", "Inspect and redact local session runtime files before sharing.")
+    : pass("runtime_raw_content_scan", "Session runtime metadata scan found no raw diff/key/token-like text.");
+}
+
 function securityOutputPolicyCheck(root: string): DoctorCheck {
   const inspectedFiles = PLUGIN_FILES.map((relativePath) => path.join(root, relativePath)).filter(pathExists);
   const content = inspectedFiles.map((file) => fs.readFileSync(file, "utf8")).join("\n");
@@ -377,10 +446,15 @@ export async function runDoctor(rootInput = process.cwd(), options: DoctorOption
     localTokenCheck(root),
     ...openApiChecks(root),
     ...sessionChecks(root, projectId),
+    recentActivityExistsCheck(root, projectId),
+    staleActivityCheck(root, projectId),
     activityTraceCoverageCheck(root, projectId),
+    workspaceSnapshotHealthCheck(root, projectId),
+    summaryCompactnessCheck(root, projectId),
     hookDryRunCheck(root, projectId),
     hookTrustReminder(),
     gitRuntimeIgnoredCheck(root),
+    runtimeRawContentLeakCheck(root),
     securityOutputPolicyCheck(root),
     await localServerCheck(root),
     await tunnelCheck(root)
@@ -593,4 +667,38 @@ function containsSecretLikeText(input: string): boolean {
     /\bsk-[A-Za-z0-9_-]{20,}\b/.test(input) ||
     /\.agentbridge[\\/]local_token/i.test(input)
   );
+}
+
+function scanRuntimeFiles(root: string, filePattern: RegExp, contentPattern: RegExp, maxFiles: number): string[] {
+  const matches: string[] = [];
+  let checked = 0;
+  const walk = (directory: string): void => {
+    if (checked >= maxFiles || matches.length) {
+      return;
+    }
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (checked >= maxFiles || matches.length) {
+        return;
+      }
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      if (!filePattern.test(entry.name)) {
+        continue;
+      }
+      checked += 1;
+      const content = fs.readFileSync(fullPath, "utf8");
+      if (contentPattern.test(content)) {
+        matches.push(fullPath);
+      }
+    }
+  };
+  try {
+    walk(root);
+  } catch {
+    return [];
+  }
+  return matches;
 }
