@@ -1,6 +1,6 @@
 {
   "name": "agentbridge",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local shared-session bridge for ChatGPT and Codex.",
   "type": "module",
   "bin": {

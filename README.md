@@ -1,90 +1,109 @@
 # CodexLink
 
-**Connect ChatGPT/GPTs to your local Codex projects safely.**
+**CodexLink** is a local-first bridge between ChatGPT/GPTs, Codex UI, MCP, CLI, and local project workspaces.
 
-CodexLink is a local-first bridge that lets ChatGPT inspect, search, and read files from projects you explicitly allow. It runs on your machine, exposes a token-protected local server, and can be connected to GPT Actions through a secure tunnel.
-
-> Backend/package name may still appear as `AgentBridge` while the product name is moving to **CodexLink**.
+The backend/package name is still `agentbridge`, but the product name is **CodexLink**. Version `1.0.0` is the stable local workspace memory release: it lets GPTs and Codex understand not only final handoffs, but also recent activity, checks, evidence, workspace snapshots, changed files, and task timelines.
 
 ---
 
-## What it can do
+## What It Can Do
 
-- Show your registered local projects in ChatGPT.
-- Let you choose the active project.
-- Inspect Git status, branch, commits, tags, and changed files.
-- Show a safe project tree.
-- Search files by name.
-- Read safe text files using project-relative paths.
-- Search text across a project.
-- Block secret files, private keys, binary files, path traversal, and raw absolute paths.
-- Keep active-project selection and audit events local.
-
----
-
-## How it works
-
-```mermaid
-flowchart LR
-    A[ChatGPT / CodexLink GPT] -->|GPT Actions| B[HTTPS tunnel]
-    B --> C[CodexLink local server]
-    C --> D[Project registry]
-    C --> E[Safe project reader]
-    C --> F[Git / session inspector]
-    D --> G[Allowed local projects]
-    E --> G
-    F --> G
-```
-
-CodexLink only exposes projects you register or scan-confirm. It does **not** scan your whole machine automatically.
+- Register explicit local projects.
+- List and select active projects.
+- Safely inspect project tree, file names, text files, and grep results.
+- Keep shared session memory across ChatGPT/GPTs, Codex, MCP, and CLI.
+- Track Activity Trace through `recent_activity` and `activity_counts`.
+- Record handoff lifecycle metadata.
+- Record evidence and check metadata.
+- Record workspace snapshots.
+- Record changed-files summaries.
+- Detect activity gaps when files changed without matching recent activity.
+- Build timelines by recent activity, handoff, file, or task.
+- Return compact resume context for GPTs/Codex.
+- Verify safe file metadata without storing file content.
+- Bootstrap Codex sessions through the local Codex plugin `SessionStart` hook.
+- Expose MCP tools for shared session coordination over STDIO.
 
 ---
 
-## Quick start
-
-### 1. Install and build
+## Quick Start On A New Machine
 
 ```powershell
-cd D:\AgentBridge
+git clone https://github.com/TuanDanny/AgentBridge.git
+cd AgentBridge
 npm install
 npm run build
-```
-
-### 2. Start the local server
-
-```powershell
 node dist\cli.js start --host 127.0.0.1 --port 7777
 ```
 
-The server creates a local token at:
+The local server creates:
 
 ```text
 .agentbridge/local_token
 ```
 
-Do not commit or share this token.
+Do not commit, print, or share this token.
 
-### 3. Register a project
+---
+
+## Register A Local Project
+
+Register an explicit project root:
+
+```powershell
+node dist\cli.js project register MyProject D:\Projects\MyProject
+node dist\cli.js project list
+node dist\cli.js project select MyProject
+```
+
+Register the current repo:
 
 ```powershell
 node dist\cli.js project register-current AgentBridge
 ```
 
-Or register another local project:
+CodexLink only exposes projects you register or scan-confirm. It does not scan your whole machine automatically.
+
+---
+
+## Shared Session And Activity Usage
 
 ```powershell
-node dist\cli.js project register MyProject D:\Projects\MyProject
+node dist\cli.js session bootstrap MyProject --source manual --json
+node dist\cli.js session activity MyProject --json
+node dist\cli.js session timeline MyProject --recent --json
+node dist\cli.js session context MyProject --compact --json
+node dist\cli.js session reconcile MyProject --json
+node dist\cli.js session file-verify MyProject --path README.md --json
 ```
 
-### 4. List projects
+Useful timeline filters:
 
 ```powershell
-node dist\cli.js project list
+node dist\cli.js session timeline MyProject --handoff handoff_000001 --json
+node dist\cli.js session timeline MyProject --file src/example.ts --json
+node dist\cli.js session timeline MyProject --task task-123 --json
 ```
 
-### 5. Connect GPT Actions
+---
 
-Generate the live GPT Action schema:
+## Safe Project Browsing
+
+```powershell
+node dist\cli.js project tree MyProject --json
+node dist\cli.js project find-file MyProject README --json
+node dist\cli.js project read-file MyProject README.md --json
+node dist\cli.js project grep MyProject "readProjectFile" --json
+node dist\cli.js project inspect MyProject --json
+```
+
+Safe readers use project-relative paths only.
+
+---
+
+## GPT Actions Setup
+
+Generate a GPT Actions-ready schema:
 
 ```powershell
 .\scripts\prepare-gpt-action.ps1
@@ -93,153 +112,140 @@ Generate the live GPT Action schema:
 Then in GPT Builder:
 
 ```text
-Actions → paste schema → Authentication: API Key / Bearer → paste local token → Save → Update GPT
+Actions -> paste schema -> Authentication: API Key / Bearer -> paste local token -> Save -> Update GPT
 ```
 
-Paste only the token value, not `Bearer <token>`.
+Important:
+
+- Paste only the token value.
+- Do not paste `Bearer <token>`.
+- Do not commit or share `.agentbridge/local_token`.
+- Cloudflare quick tunnel URLs can change after restart.
+- Use `openapi.agentbridge.gpt-actions.json` if GPT Builder rejects the canonical schema.
 
 ---
 
-## Main CLI commands
+## Codex Plugin Setup
 
-```powershell
-# Project registry
-node dist\cli.js project register-current AgentBridge
-node dist\cli.js project register MyProject D:\Projects\MyProject
-node dist\cli.js project list
-node dist\cli.js project remove MyProject
+The local Codex plugin lives in:
 
-# Safe discovery
-node dist\cli.js project scan D:\Projects --preview
-node dist\cli.js project scan D:\Projects --register --select 1,3
-
-# Safe project browsing
-node dist\cli.js project tree AgentBridge --json
-node dist\cli.js project find-file AgentBridge README --json
-node dist\cli.js project read-file AgentBridge README.md --json
-node dist\cli.js project grep AgentBridge "readProjectFile" --json
-
-# Active project
-node dist\cli.js project select AgentBridge
-node dist\cli.js project active
-node dist\cli.js project clear-active
+```text
+plugins/codexlink/
 ```
 
----
+Setup flow:
 
-## GPT Actions
+1. Enable the repo-local marketplace in Codex.
+2. Enable the CodexLink plugin.
+3. Review and trust the `SessionStart` hook once.
+4. Open a new Codex chat.
 
-CodexLink exposes these token-protected actions for GPTs:
+The hook bootstraps the shared session and lets Codex use `session_context` / `session_timeline` to resume context without long pasted prompts.
 
-| Action | Purpose |
-|---|---|
-| `listProjects` | Show registered projects |
-| `inspectProject` | Inspect Git/repo/session status |
-| `getCodexChanges` | Summarize Codex/project changes |
-| `getReviewPacket` | Produce review context |
-| `getProjectTree` | Show safe project tree |
-| `searchProjectFiles` | Find files by name |
-| `readProjectFile` | Read a safe text file |
-| `searchProjectText` | Search text across project |
-| `selectProject` | Set active project |
-| `getActiveProject` | Show current active project |
+Detailed setup:
 
----
-
-## Codex Plugin
-
-CodexLink v0.7-beta includes a local Codex plugin under `plugins/codexlink/`. After building, enable the repo marketplace in Codex, trust the `SessionStart` hook once, and the hook will run `session bootstrap` for the current project. Setup details are in `docs/guides/CODEXLINK_PLUGIN_SETUP.md`.
-
-v0.7-delta adds setup and diagnostics:
-
-```powershell
-node dist\cli.js setup codex-plugin --dry-run
-node dist\cli.js setup gpt-actions
-node dist\cli.js doctor
+```text
+docs/guides/CODEXLINK_PLUGIN_SETUP.md
 ```
 
-Doctor reports whether a problem is in the plugin, MCP config, hook trust, local server, tunnel, GPT Actions schema, or shared session. Troubleshooting details are in `docs/guides/CODEXLINK_SETUP_DOCTOR.md`.
-
-Dry-run check:
+Dry-run:
 
 ```powershell
 node plugins/codexlink/hooks/session_start.mjs --dry-run
 ```
 
+Diagnostics:
+
+```powershell
+node dist\cli.js setup codex-plugin --dry-run
+node dist\cli.js doctor
+node dist\cli.js doctor --json
+```
+
 ---
 
-## Safety model
+## MCP Tools
 
-CodexLink is designed to be local-first and allowlist-based.
+MCP remains STDIO-only. CodexLink does not expose an HTTP `/mcp` endpoint.
 
-Blocked by default:
+Important shared session MCP tools include:
 
-- Raw absolute paths such as `D:\...`
-- Path traversal such as `../secret`
+- `session_bootstrap`
+- `session_summary`
+- `session_updates`
+- `session_activity`
+- `session_timeline`
+- `session_context`
+- `session_reconcile`
+- `session_append_event`
+- `session_add_handoff`
+- `session_update_handoff`
+- `session_set_goal`
+- `session_append_check`
+
+---
+
+## Safety Model
+
+CodexLink is local-first and allowlist-based.
+
+Blocked or avoided by design:
+
 - `.env` and `.env.*`
 - `.agentbridge/local_token`
-- Private keys such as `.pem`, `.key`, `id_rsa`, `id_ed25519`
-- Binary files
-- HTTP project scan endpoints
-- `/mcp` HTTP endpoint
+- private keys such as `.pem`, `.key`, `id_rsa`, `id_ed25519`
+- binary files
+- path traversal such as `../secret`
+- raw absolute file paths as project IDs
+- raw file content in session memory
+- long raw terminal output in session memory
+- raw diffs in session memory
+- token-like values, which are redacted
+- HTTP `/mcp`
+- arbitrary command runner
+- OpenAI API key requirement
 
-Large safe text files are returned with `truncated=true` instead of being read without limit.
-
----
-
-## Example GPT workflow
-
-Ask your CodexLink GPT:
-
-```text
-Start CodexLink and show my available projects.
-```
-
-Then:
-
-```text
-Choose AgentBridge.
-Show the project tree with depth 3.
-Find files containing projectFiles.
-Read src/projectFiles.ts and summarize it.
-Search for readProjectFile across the project.
-Set AgentBridge as the active project.
-```
+Large safe text files are bounded and returned with truncation metadata instead of unlimited reads.
 
 ---
 
-## Current status
+## Current Status
 
 | Milestone | Status |
 |---|---|
 | v0.4 Direct GPT Action handshake | Passed |
-| v0.5-alpha Project registry | Passed |
-| v0.5-beta Safe project scan | Passed |
-| v0.5-gamma Safe tree/file reader | Passed |
-| v0.5-delta Active project + audit | Passed |
-| Level 4 controlled task dispatch | Planned |
+| v0.5 Project registry / safe reader | Passed |
+| v0.6 Shared session workspace memory | Passed |
+| v0.7 Codex plugin auto session | Passed |
+| v1.0 Activity Trace & Workspace Timeline | Passed |
+| v1.1 Safe Local Edit / Patch Proposal | Planned |
+| Docker packaging | Planned |
 
 ---
 
-## Development checks
+## Development Checks
 
 ```powershell
+npm run generate:openapi
 npm run build
 npm test
 git diff --check
 ```
 
-Full local acceptance test:
+Smoke tests:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-codexlink-v05-gamma-delta-full-workflow.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v08-activity-core.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v08-session-activity.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v08-workspace-timeline.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v08-final-timeline.ps1
 ```
 
-Expected result:
+---
 
-```text
-OKKK - v0.5-gamma/v0.5-delta full workflow acceptance passed
-```
+## Docker
+
+Docker packaging is not included in `v1.0.0`. Dockerfile/container deployment will be handled in a later version.
 
 ---
 
@@ -247,7 +253,7 @@ OKKK - v0.5-gamma/v0.5-delta full workflow acceptance passed
 
 Additional docs live under `docs/`:
 
-- `docs/guides/` for bridge, tunnel, and companion workflows.
+- `docs/guides/` for plugin, bridge, tunnel, and activity workflows.
 - `docs/architecture/` for inspector and registry design notes.
 - `docs/specs/` for MCP, safety, and protocol specs.
 - `docs/gpt/` for GPT Actions setup and instructions.
@@ -259,5 +265,5 @@ Additional docs live under `docs/`:
 
 - CodexLink does not require an OpenAI API key.
 - GPT Actions use your local CodexLink bearer token, not an OpenAI API key.
-- Quick Cloudflare tunnel URLs can change after restart. Use a fixed tunnel/domain for serious use.
-- The HTTP `/mcp` endpoint is not implemented; MCP remains STDIO-only for now.
+- Runtime `.agentbridge` files are local-only and must not be committed.
+- Stable tunnel/domain setup is separate from the local v1.0.0 release.
