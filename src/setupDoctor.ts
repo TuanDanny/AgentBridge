@@ -8,6 +8,14 @@ import { readActiveProject } from "./activeProject.js";
 import { listProjects, projectIdFromRoot } from "./registry.js";
 import { bootstrapSession, getRecentActivity, getSessionCompactContext, getSessionSummary } from "./sessionStore.js";
 import { findWorkspaceActivityGaps } from "./workspaceActivity.js";
+import {
+  hasLauncherConfig,
+  isQuickTunnelUrl,
+  launcherWarnings,
+  readLauncherConfig,
+  setupLauncher,
+  type LauncherSetupOptions
+} from "./launcher.js";
 
 export type DoctorStatus = "PASS" | "WARN" | "FAIL";
 
@@ -37,12 +45,14 @@ export interface SetupResult {
 
 interface DoctorOptions {
   projectId?: string;
+  launcher?: boolean;
 }
 
 interface SetupOptions {
   dryRun?: boolean;
   host?: string;
   port?: number;
+  publicUrl?: string;
 }
 
 const PLUGIN_FILES = [
@@ -261,6 +271,84 @@ async function tunnelCheck(root: string): Promise<DoctorCheck> {
   }
 }
 
+function launcherConfigCheck(root: string): DoctorCheck {
+  if (!hasLauncherConfig(root)) {
+    return warn("launcher_config", "No .agentbridge/launcher-config.json is configured.", "Run node dist/cli.js setup launcher.");
+  }
+  try {
+    const config = readLauncherConfig(root);
+    return config
+      ? pass("launcher_config", "Launcher config exists and validates.")
+      : warn("launcher_config", "Launcher config is missing.", "Run node dist/cli.js setup launcher.");
+  } catch (error) {
+    return fail("launcher_config", `Launcher config is invalid: ${shortError(error)}`, "Run node dist/cli.js setup launcher with safe values.");
+  }
+}
+
+function launcherPublicUrlCheck(root: string): DoctorCheck {
+  try {
+    const config = readLauncherConfig(root);
+    if (!config?.publicBaseUrl) {
+      return warn("launcher_public_url", "No publicBaseUrl is configured for one-click GPT Actions.", "Use a stable HTTPS URL with setup launcher.");
+    }
+    const warnings = launcherWarnings(config);
+    const quickWarning = warnings.find((item) => item.includes("Quick Tunnel URL"));
+    if (quickWarning) {
+      return warn("launcher_public_url", quickWarning, "Use a stable tunnel/domain for daily GPT Actions.");
+    }
+    return pass("launcher_public_url", "Stable-looking publicBaseUrl is configured.");
+  } catch (error) {
+    return warn("launcher_public_url", `Could not read launcher public URL: ${shortError(error)}`, "Run setup launcher.");
+  }
+}
+
+async function launcherPublicHealthCheck(root: string): Promise<DoctorCheck> {
+  try {
+    const config = readLauncherConfig(root);
+    if (!config?.publicBaseUrl) {
+      return warn("launcher_public_health", "No publicBaseUrl configured, so public /health was not checked.", "Configure a stable public URL.");
+    }
+    const response = await fetch(`${config.publicBaseUrl.replace(/\/+$/, "")}/health`, { signal: AbortSignal.timeout(2500) });
+    return response.ok
+      ? pass("launcher_public_health", "Configured publicBaseUrl /health is reachable.")
+      : warn("launcher_public_health", diagnoseHttpStatus(response.status), "Check tunnel/domain forwarding to local AgentBridge.");
+  } catch (error) {
+    return warn("launcher_public_health", `Configured publicBaseUrl /health is not reachable: ${shortError(error)}`, "Start tunnel/domain and retry doctor --launcher.");
+  }
+}
+
+function launcherGptUrlCheck(root: string): DoctorCheck {
+  try {
+    const config = readLauncherConfig(root);
+    return config?.gptUrl
+      ? pass("launcher_gpt_url", "GPT URL is configured for one-click browser open.")
+      : warn("launcher_gpt_url", "No GPT URL configured; launcher will copy the greeting only.", "Add --gpt-url if you want the launcher to open GPTs.");
+  } catch (error) {
+    return warn("launcher_gpt_url", `Could not inspect GPT URL: ${shortError(error)}`, "Run setup launcher.");
+  }
+}
+
+function launcherReadinessCheck(root: string): DoctorCheck {
+  try {
+    const config = readLauncherConfig(root);
+    if (!config) {
+      return warn("launcher_one_click_readiness", "Launcher config is missing.", "Run node dist/cli.js setup launcher.");
+    }
+    if (!pathExists(path.join(root, "dist", "cli.js"))) {
+      return fail("launcher_one_click_readiness", "dist/cli.js is missing.", "Run npm run build before using start-codexlink.bat.");
+    }
+    if (!config.publicBaseUrl) {
+      return warn("launcher_one_click_readiness", "Local one-click can start, but GPT Actions need a publicBaseUrl.", "Configure a stable HTTPS public URL.");
+    }
+    if (isQuickTunnelUrl(config.publicBaseUrl)) {
+      return warn("launcher_one_click_readiness", "Launcher uses a temporary quick tunnel URL.", "Use a stable tunnel/domain for daily one-click use.");
+    }
+    return pass("launcher_one_click_readiness", "Launcher config, build, and stable-looking public URL are ready.");
+  } catch (error) {
+    return fail("launcher_one_click_readiness", `Launcher readiness check failed: ${shortError(error)}`, "Fix launcher config.");
+  }
+}
+
 function sessionChecks(root: string, projectId: string): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   try {
@@ -459,6 +547,15 @@ export async function runDoctor(rootInput = process.cwd(), options: DoctorOption
     await localServerCheck(root),
     await tunnelCheck(root)
   ];
+  if (options.launcher) {
+    checks.push(
+      launcherConfigCheck(root),
+      launcherPublicUrlCheck(root),
+      await launcherPublicHealthCheck(root),
+      launcherGptUrlCheck(root),
+      launcherReadinessCheck(root)
+    );
+  }
   const ok = checks.every((item) => item.status !== "FAIL");
   return {
     ok,
@@ -492,6 +589,22 @@ export function setupCodexPlugin(rootInput = process.cwd(), options: SetupOption
   };
 }
 
+export function setupCodexLauncher(rootInput = process.cwd(), options: LauncherSetupOptions = {}): SetupResult {
+  const result = setupLauncher(rootInput, options);
+  const checks: DoctorCheck[] = [
+    pass("launcher_config_validation", "Launcher config values validate."),
+    ...result.warnings.map((warningText) => warn("launcher_warning", warningText, "Use setup launcher with a stable public URL when ready."))
+  ];
+  return {
+    ok: result.ok,
+    dry_run: result.dry_run,
+    root: result.root,
+    checks,
+    changed_files: result.changed_files,
+    next_steps: result.next_steps
+  };
+}
+
 export function setupGptActions(rootInput = process.cwd(), options: SetupOptions = {}): SetupResult {
   const root = resolveProjectRoot(rootInput);
   const checks: DoctorCheck[] = [];
@@ -520,7 +633,8 @@ export function setupGptActions(rootInput = process.cwd(), options: SetupOptions
 
   checks.push(...openApiChecks(root));
   const remote = readJsonIfExists<{ public_url?: string; url?: string }>(bridgePath(root, "remote_bridge.json"));
-  const publicUrl = remote?.public_url ?? remote?.url ?? "https://YOUR-TUNNEL-URL.example";
+  const launcher = readLauncherConfig(root);
+  const publicUrl = normalizeSetupPublicUrl(options.publicUrl) ?? launcher?.publicBaseUrl ?? remote?.public_url ?? remote?.url ?? "https://YOUR-TUNNEL-URL.example";
   const schemaSource = path.join(root, "openapi.agentbridge.gpt-actions.json");
   const bridgeDir = getBridgeDir(root);
   const liveSchema = bridgePath(root, "openapi-gpt-actions-live.json");
@@ -537,6 +651,8 @@ export function setupGptActions(rootInput = process.cwd(), options: SetupOptions
   checks.push(
     publicUrl === "https://YOUR-TUNNEL-URL.example"
       ? warn("gpt_actions_tunnel", "No registered tunnel URL; live schema will keep placeholder.", "Start/register a tunnel before importing into GPT Actions.")
+      : isQuickTunnelUrl(publicUrl)
+        ? warn("gpt_actions_tunnel", "Quick tunnel URL configured; GPT Actions schema may need update after restart.", "Use a stable tunnel/domain for one-click GPTs usage.")
       : pass("gpt_actions_tunnel", "Registered tunnel URL found for live schema.")
   );
   checks.push(localTokenCheck(root));
@@ -555,6 +671,22 @@ export function setupGptActions(rootInput = process.cwd(), options: SetupOptions
       "Run node dist/cli.js doctor after saving GPT Actions."
     ]
   };
+}
+
+function normalizeSetupPublicUrl(input: string | undefined): string | undefined {
+  if (!input) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(input.trim());
+  } catch {
+    throw new Error("--public-url must be a valid URL.");
+  }
+  if (url.protocol !== "https:") {
+    throw new Error("--public-url must use https://.");
+  }
+  return url.toString().replace(/\/$/, "");
 }
 
 function gptActionsGuide(publicUrl: string, liveSchema: string, localUrl: string): string {

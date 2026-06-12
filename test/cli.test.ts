@@ -590,6 +590,33 @@ describe("compiled CLI smoke tests", () => {
     expect(setup.next_steps).toContain("Start AgentBridge local server at http://127.0.0.2:7788.");
   });
 
+  it("supports one-click launcher setup dry-run without writing runtime config", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-launcher-");
+    const configPath = path.join(registryRoot, ".agentbridge", "launcher-config.json");
+    const setup = JSON.parse(
+      runCli(
+        registryRoot,
+        "setup",
+        "launcher",
+        "--dry-run",
+        "--project",
+        "AgentBridge",
+        "--public-url",
+        "https://codexlink.example.com",
+        "--gpt-url",
+        "https://chatgpt.com/g/example",
+        "--json"
+      )
+    );
+    expect(setup.ok).toBe(true);
+    expect(setup.dry_run).toBe(true);
+    expect(setup.changed_files).toEqual([]);
+    expect(fs.existsSync(configPath)).toBe(false);
+    expect(JSON.stringify(setup)).not.toContain("local_token");
+    expect(JSON.stringify(setup)).not.toContain("Bearer ");
+    expect(JSON.stringify(setup)).not.toContain("OPENAI_API_KEY");
+  });
+
   it("keeps active project event logs local-only", () => {
     const ignored = run(process.cwd(), "git", ["check-ignore", "-v", ".agentbridge/active_project_events.jsonl"]);
     expect(ignored).toContain(".agentbridge/");

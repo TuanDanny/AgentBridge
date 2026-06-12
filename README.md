@@ -46,6 +46,21 @@ Do not commit, print, or share this token.
 
 ---
 
+## One-Click Daily Launcher
+
+After first-time setup, daily use can be:
+
+```powershell
+node dist\cli.js setup launcher --project AgentBridge --public-url https://codexlink.example.com
+.\start-codexlink.bat
+```
+
+The launcher starts the local server, waits for `/health`, bootstraps the shared session if configured, copies a GPT greeting prompt, and can open your configured GPT URL. A stable HTTPS endpoint is recommended for GPT Actions; quick tunnel URLs are temporary and may require schema updates.
+
+Guide: `docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md`
+
+---
+
 ## Register A Local Project
 
 Register an explicit project root:

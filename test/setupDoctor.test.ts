@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { diagnoseHttpStatus, diagnoseSetupIssue, runDoctor, setupCodexPlugin } from "../src/setupDoctor.js";
+import { diagnoseHttpStatus, diagnoseSetupIssue, runDoctor, setupCodexLauncher, setupCodexPlugin } from "../src/setupDoctor.js";
 
 const tempRoots: string[] = [];
 
@@ -72,6 +72,34 @@ describe("CodexLink setup doctor", () => {
     );
     expect(result.checks.find((check) => check.name === "summary_compactness")?.status).toBe("PASS");
     expect(result.checks.find((check) => check.name === "runtime_raw_content_scan")?.status).toBe("PASS");
+  });
+
+  it("reports missing launcher config as WARN without failing doctor", async () => {
+    const root = makeTempRoot();
+    const result = await runDoctor(root, { projectId: "DoctorProject", launcher: true });
+    const launcherConfig = result.checks.find((check) => check.name === "launcher_config");
+    expect(result.ok).toBe(true);
+    expect(launcherConfig).toMatchObject({ status: "WARN" });
+    expect(JSON.stringify(result)).not.toContain("local_token");
+    expect(JSON.stringify(result)).not.toContain("Bearer ");
+  });
+
+  it("reports trycloudflare launcher URLs as WARN", async () => {
+    const root = makeTempRoot();
+    const setup = setupCodexLauncher(root, {
+      projectId: "DoctorProject",
+      publicBaseUrl: "https://temporary.trycloudflare.com",
+      gptUrl: "https://chatgpt.com/g/example"
+    });
+    expect(setup.ok).toBe(true);
+    const result = await runDoctor(root, { projectId: "DoctorProject", launcher: true });
+    const publicUrl = result.checks.find((check) => check.name === "launcher_public_url");
+    const readiness = result.checks.find((check) => check.name === "launcher_one_click_readiness");
+    expect(publicUrl).toMatchObject({ status: "WARN" });
+    expect(readiness).toMatchObject({ status: "WARN" });
+    expect(JSON.stringify(result)).not.toContain("local_token");
+    expect(JSON.stringify(result)).not.toContain("Bearer ");
+    expect(JSON.stringify(result)).not.toContain("OPENAI_API_KEY");
   });
 
   it("diagnoses common setup failures with actionable messages", () => {

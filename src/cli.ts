@@ -59,7 +59,8 @@ import {
   searchProjectText
 } from "./projectFiles.js";
 import { clearActiveProject, readActiveProject, selectActiveProject } from "./activeProject.js";
-import { formatDoctorText, formatSetupText, runDoctor, setupCodexPlugin, setupGptActions } from "./setupDoctor.js";
+import { formatDoctorText, formatSetupText, runDoctor, setupCodexLauncher, setupCodexPlugin, setupGptActions } from "./setupDoctor.js";
+import { type LauncherTunnelMode } from "./launcher.js";
 import {
   createCodexChangesSummary,
   createProjectInspectPacket,
@@ -1557,19 +1558,79 @@ setup
   });
 
 setup
+  .command("launcher")
+  .description("Create or validate local one-click launcher config.")
+  .option("--dry-run", "validate without writing .agentbridge/launcher-config.json")
+  .option("--project <projectId>", "project id to bootstrap from the launcher")
+  .option("--host <host>", "local server host", "127.0.0.1")
+  .option("--port <port>", "local server port", "7777")
+  .option("--public-url <url>", "stable HTTPS public base URL for GPT Actions")
+  .option("--gpt-url <url>", "ChatGPT GPT URL to open after startup")
+  .option("--tunnel-mode <mode>", "none, quick, stable, or external")
+  .option("--open-browser", "open the configured GPT URL")
+  .option("--no-open-browser", "do not open the configured GPT URL")
+  .option("--copy-greeting", "copy the GPT greeting prompt")
+  .option("--no-copy-greeting", "do not copy the GPT greeting prompt")
+  .option("--auto-bootstrap", "bootstrap shared session during launcher startup")
+  .option("--no-auto-bootstrap", "do not bootstrap shared session during launcher startup")
+  .option("--auto-doctor", "run doctor from launcher when configured")
+  .option("--no-auto-doctor", "do not run doctor from launcher")
+  .option("--json", "print JSON result")
+  .action(
+    (options: {
+      dryRun?: boolean;
+      project?: string;
+      host: string;
+      port: string;
+      publicUrl?: string;
+      gptUrl?: string;
+      tunnelMode?: string;
+      openBrowser?: boolean;
+      copyGreeting?: boolean;
+      autoBootstrap?: boolean;
+      autoDoctor?: boolean;
+      json?: boolean;
+    }) => {
+      try {
+        const port = Number.parseInt(options.port, 10);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          throw new Error("Port must be an integer from 1 to 65535.");
+        }
+        const result = setupCodexLauncher(process.cwd(), {
+          dryRun: Boolean(options.dryRun),
+          projectId: options.project,
+          host: options.host,
+          port,
+          publicBaseUrl: options.publicUrl,
+          gptUrl: options.gptUrl,
+          tunnelMode: options.tunnelMode as LauncherTunnelMode | undefined,
+          openBrowser: options.openBrowser,
+          copyGreetingToClipboard: options.copyGreeting,
+          autoBootstrap: options.autoBootstrap,
+          autoDoctor: options.autoDoctor
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : formatSetupText("CodexLink One-Click Launcher Setup", result));
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
+
+setup
   .command("gpt-actions")
   .description("Regenerate GPT Actions schema assets and print safe setup next steps.")
   .option("--dry-run", "validate without writing files")
   .option("--host <host>", "local server host", "127.0.0.1")
   .option("--port <port>", "local server port", "7777")
+  .option("--public-url <url>", "stable HTTPS public base URL to place in the live GPT Actions schema")
   .option("--json", "print JSON result")
-  .action((options: { dryRun?: boolean; host: string; port: string; json?: boolean }) => {
+  .action((options: { dryRun?: boolean; host: string; port: string; publicUrl?: string; json?: boolean }) => {
     try {
       const port = Number.parseInt(options.port, 10);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         throw new Error("Port must be an integer from 1 to 65535.");
       }
-      const result = setupGptActions(process.cwd(), { dryRun: Boolean(options.dryRun), host: options.host, port });
+      const result = setupGptActions(process.cwd(), { dryRun: Boolean(options.dryRun), host: options.host, port, publicUrl: options.publicUrl });
       console.log(options.json ? JSON.stringify(result, null, 2) : formatSetupText("CodexLink GPT Actions Setup", result));
     } catch (error) {
       handleError(error);
@@ -1580,10 +1641,11 @@ program
   .command("doctor")
   .description("Diagnose CodexLink plugin, MCP, GPT Actions, tunnel, session, and security setup.")
   .option("--project <projectId>", "project id to bootstrap/check")
+  .option("--launcher", "include one-click launcher readiness checks")
   .option("--json", "print JSON result")
-  .action(async (options: { project?: string; json?: boolean }) => {
+  .action(async (options: { project?: string; launcher?: boolean; json?: boolean }) => {
     try {
-      const result = await runDoctor(process.cwd(), { projectId: options.project });
+      const result = await runDoctor(process.cwd(), { projectId: options.project, launcher: Boolean(options.launcher) });
       console.log(options.json ? JSON.stringify(result, null, 2) : formatDoctorText(result));
     } catch (error) {
       handleError(error);
