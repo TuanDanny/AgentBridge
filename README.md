@@ -33,7 +33,7 @@ git clone https://github.com/TuanDanny/AgentBridge.git
 cd AgentBridge
 npm install
 npm run build
-node dist\cli.js start --host 127.0.0.1 --port 7777
+.\start-codexlink.bat
 ```
 
 The local server creates:
@@ -48,14 +48,22 @@ Do not commit, print, or share this token.
 
 ## One-Click Daily Launcher
 
-After first-time setup, daily use can be:
+After install/build, daily use can be:
 
 ```powershell
-node dist\cli.js setup launcher --project AgentBridge --public-url https://codexlink.example.com
 .\start-codexlink.bat
 ```
 
-The launcher starts the local server, waits for `/health`, bootstraps the shared session if configured, copies a GPT greeting prompt, and can open your configured GPT URL. A stable HTTPS endpoint is recommended for GPT Actions; quick tunnel URLs are temporary and may require schema updates.
+On first run, the launcher creates local launcher config if it is missing. It starts the local server, waits for `/health`, bootstraps the shared session if configured, copies a GPT greeting prompt, and can open your configured GPT URL.
+
+For GPT Actions to call back without URL changes, configure a stable HTTPS endpoint:
+
+```powershell
+node dist\cli.js setup launcher --project AgentBridge --public-url https://codexlink.example.com --gpt-url https://chatgpt.com/g/YOUR-GPT
+node dist\cli.js setup gpt-actions --public-url https://codexlink.example.com
+```
+
+Quick tunnel URLs are temporary and may require schema updates.
 
 Guide: `docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md`
 

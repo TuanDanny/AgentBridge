@@ -52,9 +52,12 @@ describe("one-click launcher helpers", () => {
     expect(result.warnings).toContain(QUICK_TUNNEL_WARNING);
   });
 
-  it("creates a GPT greeting without token-like content", () => {
+  it("creates a GPT greeting without token-like content or mojibake", () => {
     const greeting = createLauncherGreeting();
     expect(greeting).toContain("Xin chào CodexLink");
+    expect(greeting).toContain("Không đọc repo nếu chưa cần.");
+    expect(greeting).not.toContain("Ã");
+    expect(greeting).not.toContain("Ä");
     expect(greeting).not.toContain("local_token");
     expect(greeting).not.toContain("Bearer ");
     expect(greeting).not.toContain("OPENAI_API_KEY");
@@ -72,5 +75,15 @@ describe("one-click launcher helpers", () => {
     expect(result.dry_run).toBe(true);
     expect(result.changed_files).toEqual([]);
     expect(fs.existsSync(launcherConfigPath(root))).toBe(false);
+  });
+
+  it("setup launcher writes local runtime config outside git scope when not dry-run", () => {
+    const root = makeTempRoot();
+    const result = setupLauncher(root, {
+      projectId: "AgentBridge"
+    });
+    expect(result.ok).toBe(true);
+    expect(result.changed_files).toEqual([".agentbridge/launcher-config.json"]);
+    expect(fs.existsSync(launcherConfigPath(root))).toBe(true);
   });
 });

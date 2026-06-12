@@ -128,6 +128,16 @@ if (!(Test-Path (Join-Path $Root "dist\cli.js"))) {
   }
 }
 
+if (!(Test-Path $ConfigFile)) {
+  $defaultProject = Split-Path $Root -Leaf
+  if ($DryRun) {
+    Say "Dry-run: would create local launcher config for project=$defaultProject."
+  } else {
+    Say "First run: creating local launcher config for project=$defaultProject."
+    Invoke-Cli @("dist\cli.js","setup","launcher","--project",$defaultProject,"--json") | Out-Null
+  }
+}
+
 $Config = Read-Config
 $LocalUrl = "http://$($Config.host):$($Config.port)"
 $HealthUrl = "$LocalUrl/health"
@@ -158,6 +168,7 @@ if ($Config.publicBaseUrl) {
   }
 } else {
   Warn "Configured public URL: WARN (missing). GPT Actions need an HTTPS public endpoint."
+  Say "For true GPT Actions one-click, run setup launcher with --public-url or use the future relay mode."
 }
 
 if (!$DryRun -and $Started) {
