@@ -63,6 +63,7 @@ import { formatDoctorText, formatSetupText, runDoctor, setupCodexLauncher, setup
 import { type LauncherTunnelMode } from "./launcher.js";
 import { formatRelayProtocolSummary, getRelayProtocolSpec, validateRelayProtocolSpec } from "./relayProtocol.js";
 import { bindRelayPairingCode, createRelayPairing, readRelayPairingStatus, revokeRelayPairing } from "./relayPairing.js";
+import { createRelayEnvelope, dispatchRelayRequestLocally } from "./relayLocalDispatch.js";
 import {
   createCodexChangesSummary,
   createProjectInspectPacket,
@@ -1752,6 +1753,50 @@ relayPairing
       handleError(error);
     }
   });
+
+relay
+  .command("dispatch")
+  .description("Dry-run a local relay metadata dispatch through the allowlist validator.")
+  .argument("<operationId>", "listProjects, getSessionSummary, getSessionContext, or getSessionTimeline")
+  .option("--project <projectId>", "safe registered project id for project-scoped operations")
+  .option("--mode <mode>", "timeline mode: recent, handoff, file, or task")
+  .option("--handoff <handoffId>", "timeline handoff filter")
+  .option("--file <path>", "timeline file filter")
+  .option("--task <taskId>", "timeline task filter")
+  .option("--limit <n>", "timeline limit", "20")
+  .option("--json", "print JSON result")
+  .action(
+    (
+      operationId: string,
+      options: { project?: string; mode?: string; handoff?: string; file?: string; task?: string; limit?: string; json?: boolean }
+    ) => {
+      try {
+        const limit = Number.parseInt(options.limit ?? "20", 10);
+        const body =
+          operationId === "getSessionTimeline"
+            ? {
+                mode: options.mode,
+                handoff_id: options.handoff,
+                file_path: options.file,
+                task_id: options.task,
+                limit
+              }
+            : undefined;
+        const envelope = createRelayEnvelope(operationId, options.project, body);
+        const result = dispatchRelayRequestLocally(process.cwd(), envelope);
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(`Relay dispatch ${operationId}: ${result.ok ? "PASS" : "FAIL"} (${result.status})`);
+          if (result.error) {
+            console.log(result.error.message);
+          }
+        }
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  );
 
 program
   .command("pair")

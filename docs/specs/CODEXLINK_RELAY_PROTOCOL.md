@@ -91,6 +91,19 @@ The validator in `src/relayProtocol.ts` rejects:
 
 This is still not a production relay. It is a guardrail for the next implementation phase.
 
+## Local Dispatch Dry-Run
+
+The local dispatcher in `src/relayLocalDispatch.ts` can execute allowlisted metadata operations without opening a relay server:
+
+```powershell
+node dist\cli.js relay dispatch listProjects --json
+node dist\cli.js relay dispatch getSessionSummary --project AgentBridge --json
+node dist\cli.js relay dispatch getSessionContext --project AgentBridge --json
+node dist\cli.js relay dispatch getSessionTimeline --project AgentBridge --mode recent --json
+```
+
+This is local-only and validates the envelope before dispatch. It does not expose a network listener, does not use `.agentbridge/local_token`, and does not add write-file, shell, scan, or HTTP MCP capability.
+
 ## Forbidden Capabilities
 
 - No arbitrary shell or command runner.

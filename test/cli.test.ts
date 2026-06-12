@@ -671,6 +671,29 @@ describe("compiled CLI smoke tests", () => {
     expect(stored).not.toContain("OPENAI_API_KEY");
   });
 
+  it("supports local relay dispatch dry-run for allowlisted metadata routes", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-relay-dispatch-");
+    JSON.parse(runCli(registryRoot, "project", "register-current", "RelayCli"));
+    JSON.parse(runCli(registryRoot, "session", "bootstrap", "RelayCli", "--source", "relay_dispatch_cli", "--json"));
+
+    const listOutput = runCli(registryRoot, "relay", "dispatch", "listProjects", "--json");
+    const list = JSON.parse(listOutput);
+    expect(list.ok).toBe(true);
+    expect(list.data.mode).toBe("registry");
+    expect(listOutput).not.toContain(registryRoot);
+
+    const summaryOutput = runCli(registryRoot, "relay", "dispatch", "getSessionSummary", "--project", "RelayCli", "--json");
+    const summary = JSON.parse(summaryOutput);
+    expect(summary.ok).toBe(true);
+    expect(summary.data.project_id).toBe("RelayCli");
+    expect(summary.metadata).toMatchObject({ validated: true, local_only: true, content_stored: false });
+    expect(summaryOutput).not.toContain("local_token");
+    expect(summaryOutput).not.toContain("Bearer ");
+
+    const rejected = runCliFailure(registryRoot, "relay", "dispatch", "getSessionSummary", "--project", "D:/AgentBridge", "--json");
+    expect(rejected).toContain("Project id must match");
+  });
+
   it("keeps active project event logs local-only", () => {
     const ignored = run(process.cwd(), "git", ["check-ignore", "-v", ".agentbridge/active_project_events.jsonl"]);
     expect(ignored).toContain(".agentbridge/");
