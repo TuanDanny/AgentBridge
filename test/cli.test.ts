@@ -644,6 +644,33 @@ describe("compiled CLI smoke tests", () => {
     expect(output).not.toContain("OPENAI_API_KEY");
   });
 
+  it("supports relay pairing CLI without storing raw code values", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-relay-pairing-");
+    const createdOutput = runCli(registryRoot, "relay", "pairing", "create", "--ttl", "60", "--json");
+    const created = JSON.parse(createdOutput);
+    expect(created.ok).toBe(true);
+    expect(created.status).toBe("pending");
+    expect(created.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+
+    const statusOutput = runCli(registryRoot, "relay", "pairing", "status", "--json");
+    const status = JSON.parse(statusOutput);
+    expect(status.status).toBe("pending");
+    expect(status.code_value_stored).toBe(false);
+    expect(statusOutput).not.toContain(created.code);
+
+    const boundOutput = runCli(registryRoot, "relay", "pairing", "bind", "--code", created.code, "--gpt-session", "gpt-session-cli", "--json");
+    const bound = JSON.parse(boundOutput);
+    expect(bound.status).toBe("paired");
+    expect(bound.matched).toBe(true);
+    expect(boundOutput).not.toContain(created.code);
+
+    const stored = fs.readFileSync(path.join(registryRoot, ".agentbridge", "relay-pairing.json"), "utf8");
+    expect(stored).not.toContain(created.code);
+    expect(stored).not.toContain("local_token");
+    expect(stored).not.toContain("Bearer ");
+    expect(stored).not.toContain("OPENAI_API_KEY");
+  });
+
   it("keeps active project event logs local-only", () => {
     const ignored = run(process.cwd(), "git", ["check-ignore", "-v", ".agentbridge/active_project_events.jsonl"]);
     expect(ignored).toContain(".agentbridge/");

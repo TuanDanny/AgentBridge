@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { diagnoseHttpStatus, diagnoseSetupIssue, runDoctor, setupCodexLauncher, setupCodexPlugin, setupRelay } from "../src/setupDoctor.js";
+import { bindRelayPairingCode, createRelayPairing } from "../src/relayPairing.js";
 
 const tempRoots: string[] = [];
 
@@ -116,6 +117,19 @@ describe("CodexLink setup doctor", () => {
     const result = await runDoctor(root, { projectId: "DoctorProject", launcher: true });
     const relay = result.checks.find((check) => check.name === "relay_mode");
     expect(relay).toMatchObject({ status: "WARN" });
+    expect(result.checks.find((check) => check.name === "relay_pairing")).toMatchObject({ status: "WARN" });
+  });
+
+  it("reports paired relay metadata without exposing a raw code", async () => {
+    const root = makeTempRoot();
+    const pairing = createRelayPairing(root, { ttlSeconds: 60 });
+    bindRelayPairingCode(root, pairing.code, "gpt-session-doctor");
+
+    const result = await runDoctor(root, { projectId: "DoctorProject", launcher: true });
+    expect(result.checks.find((check) => check.name === "relay_pairing")).toMatchObject({ status: "PASS" });
+    expect(JSON.stringify(result)).not.toContain(pairing.code);
+    expect(JSON.stringify(result)).not.toContain("local_token");
+    expect(JSON.stringify(result)).not.toContain("Bearer ");
   });
 
   it("diagnoses common setup failures with actionable messages", () => {

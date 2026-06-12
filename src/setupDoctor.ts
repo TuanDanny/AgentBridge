@@ -18,6 +18,7 @@ import {
   type LauncherSetupOptions
 } from "./launcher.js";
 import { validateRelayProtocolSpec } from "./relayProtocol.js";
+import { readRelayPairingStatus } from "./relayPairing.js";
 
 export type DoctorStatus = "PASS" | "WARN" | "FAIL";
 
@@ -368,6 +369,23 @@ function relayPlaceholderCheck(root: string): DoctorCheck {
   return warn("relay_mode", "Relay mode is not configured. This is expected until v1.2 relay work begins.", "Use stable tunnel/domain for GPT Actions today.");
 }
 
+function relayPairingCheck(root: string): DoctorCheck {
+  const pairing = readRelayPairingStatus(root);
+  if (pairing.status === "missing") {
+    return warn("relay_pairing", "No relay pairing metadata exists.", "Run node dist/cli.js relay pairing create when testing relay mode.");
+  }
+  if (pairing.status === "paired") {
+    return pass("relay_pairing", "Relay pairing metadata is paired. Raw pairing code is not stored.");
+  }
+  if (pairing.status === "pending") {
+    return warn("relay_pairing", "Relay pairing code is pending and short-lived.", "Complete pairing before it expires, or revoke it.");
+  }
+  if (pairing.status === "expired") {
+    return warn("relay_pairing", "Relay pairing code is expired.", "Run relay pairing create again when needed.");
+  }
+  return warn("relay_pairing", "Relay pairing metadata is revoked.", "Create a new pairing code if relay testing is needed.");
+}
+
 function sessionChecks(root: string, projectId: string): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   try {
@@ -571,10 +589,11 @@ export async function runDoctor(rootInput = process.cwd(), options: DoctorOption
       launcherConfigCheck(root),
       launcherPublicUrlCheck(root),
       await launcherPublicHealthCheck(root),
-      launcherGptUrlCheck(root),
-      launcherReadinessCheck(root),
-      relayPlaceholderCheck(root)
-    );
+        launcherGptUrlCheck(root),
+        launcherReadinessCheck(root),
+        relayPlaceholderCheck(root),
+        relayPairingCheck(root)
+      );
   }
   const ok = checks.every((item) => item.status !== "FAIL");
   return {

@@ -55,6 +55,17 @@ node dist\cli.js relay spec
 node dist\cli.js relay spec --json
 ```
 
+Local pairing preparation:
+
+```powershell
+node dist\cli.js relay pairing create
+node dist\cli.js relay pairing status
+node dist\cli.js relay pairing bind --code <CODE> --gpt-session <safe-session-hint>
+node dist\cli.js relay pairing revoke
+```
+
+These commands do not start a relay server. The raw pairing code is printed once by `create`; `.agentbridge/relay-pairing.json` stores a hash, expiry, device ID, and status metadata only.
+
 ## Request Envelope Validation
 
 Before any future relay server forwards a request to a local launcher, it must validate a bounded request envelope:

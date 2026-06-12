@@ -62,6 +62,7 @@ import { clearActiveProject, readActiveProject, selectActiveProject } from "./ac
 import { formatDoctorText, formatSetupText, runDoctor, setupCodexLauncher, setupCodexPlugin, setupGptActions, setupRelay } from "./setupDoctor.js";
 import { type LauncherTunnelMode } from "./launcher.js";
 import { formatRelayProtocolSummary, getRelayProtocolSpec, validateRelayProtocolSpec } from "./relayProtocol.js";
+import { bindRelayPairingCode, createRelayPairing, readRelayPairingStatus, revokeRelayPairing } from "./relayPairing.js";
 import {
   createCodexChangesSummary,
   createProjectInspectPacket,
@@ -1667,9 +1668,9 @@ program
     }
   });
 
-program
-  .command("relay")
-  .description("Inspect the experimental CodexLink relay protocol spec.")
+const relay = program.command("relay").description("Inspect and prepare the experimental CodexLink relay flow.");
+
+relay
   .command("spec")
   .description("Print the relay protocol allowlist and safety guardrails.")
   .option("--json", "print JSON result")
@@ -1679,6 +1680,74 @@ program
       const validation = validateRelayProtocolSpec(spec);
       const result = { ok: validation.ok, spec, validation };
       console.log(options.json ? JSON.stringify(result, null, 2) : formatRelayProtocolSummary(spec));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+const relayPairing = relay.command("pairing").description("Manage local relay pairing metadata without starting a relay server.");
+
+relayPairing
+  .command("create")
+  .description("Create a short-lived local relay pairing code.")
+  .option("--ttl <seconds>", "pairing code TTL in seconds, 30-900", "300")
+  .option("--json", "print JSON result")
+  .action((options: { ttl: string; json?: boolean }) => {
+    try {
+      const ttlSeconds = Number.parseInt(options.ttl, 10);
+      const result = createRelayPairing(process.cwd(), { ttlSeconds });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log("CodexLink Relay Pairing");
+        console.log(`Status: ${result.status}`);
+        console.log(`Pairing ID: ${result.pairing_id}`);
+        console.log(`Device ID: ${result.device_id}`);
+        console.log(`Code: ${result.code}`);
+        console.log(`Expires at: ${result.expires_at}`);
+        console.log("Raw code is not stored in .agentbridge.");
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+relayPairing
+  .command("status")
+  .description("Print local relay pairing status without revealing any code value.")
+  .option("--json", "print JSON result")
+  .action((options: { json?: boolean }) => {
+    try {
+      const result = readRelayPairingStatus(process.cwd());
+      console.log(options.json ? JSON.stringify(result, null, 2) : `Relay pairing status: ${result.status}`);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+relayPairing
+  .command("bind")
+  .description("Simulate binding a short-lived pairing code to a GPT session hint.")
+  .requiredOption("--code <code>", "pairing code printed by relay pairing create")
+  .requiredOption("--gpt-session <hint>", "safe GPT session hint")
+  .option("--json", "print JSON result")
+  .action((options: { code: string; gptSession: string; json?: boolean }) => {
+    try {
+      const result = bindRelayPairingCode(process.cwd(), options.code, options.gptSession);
+      console.log(options.json ? JSON.stringify(result, null, 2) : `Relay pairing bind: ${result.matched ? "PASS" : "FAIL"} (${result.status})`);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+relayPairing
+  .command("revoke")
+  .description("Revoke local relay pairing metadata.")
+  .option("--json", "print JSON result")
+  .action((options: { json?: boolean }) => {
+    try {
+      const result = revokeRelayPairing(process.cwd());
+      console.log(options.json ? JSON.stringify(result, null, 2) : `Relay pairing revoked: ${result.status}`);
     } catch (error) {
       handleError(error);
     }
