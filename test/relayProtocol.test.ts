@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getRelayProtocolSpec, validateRelayProtocolSpec } from "../src/relayProtocol.js";
+import { getRelayProtocolSpec, validateRelayProtocolSpec, validateRelayRequestEnvelope } from "../src/relayProtocol.js";
 
 describe("relay protocol spec", () => {
   it("is spec-only and validates security guardrails", () => {
@@ -33,5 +33,47 @@ describe("relay protocol spec", () => {
       expect(route.path.startsWith("/chatgpt/") || route.path.startsWith("/relay/")).toBe(true);
       expect(route.response_content_policy === "metadata_only" || route.response_content_policy === "bounded_redacted_json").toBe(true);
     }
+  });
+
+  it("validates allowlisted relay request envelopes", () => {
+    const valid = validateRelayRequestEnvelope({
+      operation_id: "getSessionSummary",
+      method: "GET",
+      path: "/chatgpt/projects/AgentBridge/session/summary",
+      project_id: "AgentBridge"
+    });
+
+    expect(valid.ok).toBe(true);
+    expect(valid.errors).toEqual([]);
+    expect(valid.route?.operation_id).toBe("getSessionSummary");
+  });
+
+  it("rejects relay request envelopes for unsafe routes and project ids", () => {
+    const cases = [
+      validateRelayRequestEnvelope({ operation_id: "unknown", method: "GET", path: "/chatgpt/projects" }),
+      validateRelayRequestEnvelope({ operation_id: "getSessionSummary", method: "POST", path: "/chatgpt/projects/AgentBridge/session/summary", project_id: "AgentBridge" }),
+      validateRelayRequestEnvelope({ operation_id: "getSessionSummary", method: "GET", path: "/mcp", project_id: "AgentBridge" }),
+      validateRelayRequestEnvelope({ operation_id: "getSessionSummary", method: "GET", path: "/chatgpt/projects/D:/AgentBridge/session/summary", project_id: "D:/AgentBridge" }),
+      validateRelayRequestEnvelope({ operation_id: "getSessionSummary", method: "GET", path: "/chatgpt/projects/../secret/session/summary", project_id: "../secret" }),
+      validateRelayRequestEnvelope({ operation_id: "getSessionSummary", method: "GET", path: "/chatgpt/projects/AgentBridge/session/summary", project_id: "AgentBridge", body: { action: "write_file" } })
+    ];
+
+    for (const result of cases) {
+      expect(result.ok).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("caps relay request envelope size", () => {
+    const result = validateRelayRequestEnvelope({
+      operation_id: "getSessionSummary",
+      method: "GET",
+      path: "/chatgpt/projects/AgentBridge/session/summary",
+      project_id: "AgentBridge",
+      body: { padding: "x".repeat(70 * 1024) }
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.includes("exceeds"))).toBe(true);
   });
 });

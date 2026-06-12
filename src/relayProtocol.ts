@@ -43,6 +43,21 @@ export interface RelayProtocolValidation {
   errors: string[];
 }
 
+export interface RelayRequestEnvelope {
+  operation_id: string;
+  method: "GET" | "POST" | string;
+  path: string;
+  project_id?: string;
+  body?: unknown;
+}
+
+export interface RelayRequestValidation {
+  ok: boolean;
+  errors: string[];
+  route?: RelayAllowedRoute;
+  request_bytes: number;
+}
+
 const FORBIDDEN_TERMS = [
   "shell",
   "command_runner",
@@ -53,6 +68,8 @@ const FORBIDDEN_TERMS = [
   "openai_api_key",
   "/mcp"
 ];
+
+const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,80}$/;
 
 export function getRelayProtocolSpec(): RelayProtocolSpec {
   return {
@@ -140,6 +157,65 @@ export function getRelayProtocolSpec(): RelayProtocolSpec {
   };
 }
 
+export function validateRelayRequestEnvelope(
+  envelope: RelayRequestEnvelope,
+  spec: RelayProtocolSpec = getRelayProtocolSpec()
+): RelayRequestValidation {
+  const errors: string[] = [];
+  const operationId = typeof envelope.operation_id === "string" ? envelope.operation_id.trim() : "";
+  const method = typeof envelope.method === "string" ? envelope.method.toUpperCase() : "";
+  const path = typeof envelope.path === "string" ? envelope.path.trim() : "";
+  const requestBytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+
+  if (!operationId) {
+    errors.push("Relay request operation_id is required.");
+  }
+  if (method !== "GET" && method !== "POST") {
+    errors.push("Relay request method must be GET or POST.");
+  }
+  if (!path.startsWith("/")) {
+    errors.push("Relay request path must be an absolute HTTP path.");
+  }
+  if (path.includes("..") || path.includes("\\") || /^[A-Za-z]:/.test(path)) {
+    errors.push("Relay request path contains unsafe traversal or filesystem syntax.");
+  }
+  if (requestBytes > spec.limits.max_request_bytes) {
+    errors.push(`Relay request exceeds ${spec.limits.max_request_bytes} bytes.`);
+  }
+
+  const route = spec.allowed_routes.find((candidate) => candidate.operation_id === operationId);
+  if (!route) {
+    errors.push(`Relay operation ${operationId || "<missing>"} is not allowlisted.`);
+  } else {
+    if (route.method !== method) {
+      errors.push(`Relay operation ${operationId} must use ${route.method}.`);
+    }
+    if (!matchesRelayRoute(route.path, path)) {
+      errors.push(`Relay operation ${operationId} path is not allowlisted.`);
+    }
+    if (route.path.includes("{projectId}")) {
+      const projectId = envelope.project_id ?? extractProjectIdFromPath(route.path, path);
+      if (!projectId || !PROJECT_ID_PATTERN.test(projectId) || projectId.includes("..") || projectId.includes("/") || projectId.includes("\\") || projectId.includes(":")) {
+        errors.push("Relay project_id must be a safe registered project id, not a path.");
+      }
+    }
+  }
+
+  const normalized = `${operationId} ${method} ${path} ${JSON.stringify(envelope.body ?? {})}`.toLowerCase();
+  for (const forbidden of FORBIDDEN_TERMS) {
+    if (normalized.includes(forbidden)) {
+      errors.push(`Relay request contains forbidden term ${forbidden}.`);
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    route,
+    request_bytes: requestBytes
+  };
+}
+
 export function validateRelayProtocolSpec(spec: RelayProtocolSpec = getRelayProtocolSpec()): RelayProtocolValidation {
   const errors: string[] = [];
   if (spec.status !== "spec_only") {
@@ -187,4 +263,26 @@ export function formatRelayProtocolSummary(spec: RelayProtocolSpec = getRelayPro
     "",
     "This is a protocol spec only. It does not start a relay server or expose local tools."
   ].join("\n");
+}
+
+function matchesRelayRoute(template: string, actualPath: string): boolean {
+  if (template === actualPath) {
+    return true;
+  }
+  if (!template.includes("{projectId}")) {
+    return false;
+  }
+  const templateParts = template.split("/");
+  const actualParts = actualPath.split("/");
+  if (templateParts.length !== actualParts.length) {
+    return false;
+  }
+  return templateParts.every((part, index) => part === "{projectId}" || part === actualParts[index]);
+}
+
+function extractProjectIdFromPath(template: string, actualPath: string): string | undefined {
+  const templateParts = template.split("/");
+  const actualParts = actualPath.split("/");
+  const index = templateParts.indexOf("{projectId}");
+  return index >= 0 ? actualParts[index] : undefined;
 }

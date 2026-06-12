@@ -55,6 +55,31 @@ node dist\cli.js relay spec
 node dist\cli.js relay spec --json
 ```
 
+## Request Envelope Validation
+
+Before any future relay server forwards a request to a local launcher, it must validate a bounded request envelope:
+
+```json
+{
+  "operation_id": "getSessionSummary",
+  "method": "GET",
+  "path": "/chatgpt/projects/AgentBridge/session/summary",
+  "project_id": "AgentBridge"
+}
+```
+
+The validator in `src/relayProtocol.ts` rejects:
+
+- operations not present in the allowlist
+- method/path mismatches
+- `/mcp`
+- filesystem-looking project IDs or paths
+- traversal such as `..`
+- request bodies larger than the MVP byte cap
+- forbidden capability terms such as file write, command runner, local token, or OpenAI API key
+
+This is still not a production relay. It is a guardrail for the next implementation phase.
+
 ## Forbidden Capabilities
 
 - No arbitrary shell or command runner.
