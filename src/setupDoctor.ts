@@ -17,6 +17,7 @@ import {
   setupLauncher,
   type LauncherSetupOptions
 } from "./launcher.js";
+import { validateRelayProtocolSpec } from "./relayProtocol.js";
 
 export type DoctorStatus = "PASS" | "WARN" | "FAIL";
 
@@ -353,6 +354,10 @@ function launcherReadinessCheck(root: string): DoctorCheck {
 function relayPlaceholderCheck(root: string): DoctorCheck {
   const relayConfig = readJsonIfExists<{ enabled?: boolean; mode?: string }>(bridgePath(root, "relay-config.json"));
   const launcher = readLauncherConfig(root);
+  const relayProtocol = validateRelayProtocolSpec();
+  if (!relayProtocol.ok) {
+    return fail("relay_protocol", `Relay protocol spec has ${relayProtocol.errors.length} validation error(s).`, "Fix relay protocol spec before implementing relay.");
+  }
   if (launcher?.tunnelMode === "relay" || relayConfig) {
     return warn(
       "relay_mode",
@@ -624,6 +629,9 @@ export function setupRelay(rootInput = process.cwd(), options: SetupOptions = {}
   const root = resolveProjectRoot(rootInput);
   const checks: DoctorCheck[] = [
     warn("relay_mode", RELAY_MODE_WARNING, "Use stable tunnel/domain for production until relay protocol and pairing are implemented."),
+    validateRelayProtocolSpec().ok
+      ? pass("relay_protocol", "Relay protocol spec validates as spec-only with bounded allowlisted routes.")
+      : fail("relay_protocol", "Relay protocol spec validation failed.", "Fix relay protocol before continuing."),
     pass("relay_security_guardrails", "Relay setup placeholder adds no command runner, no file write capability, and no OpenAI API key requirement."),
     pass("relay_docs", "Relay roadmap is documented for future implementation.")
   ];

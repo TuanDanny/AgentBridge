@@ -69,6 +69,7 @@ Relay planning placeholder:
 
 ```powershell
 node dist\cli.js setup relay --dry-run
+node dist\cli.js relay spec
 ```
 
 Relay mode is not production yet; it is the planned v1.2 path toward zero-setup GPT Actions without user-managed tunnels.

@@ -96,6 +96,7 @@ Relay planning placeholder:
 
 ```powershell
 node dist\cli.js setup relay --dry-run
+node dist\cli.js relay spec
 ```
 
 This command does not start or implement a production relay. It exists to make the future zero-setup path explicit while keeping v1.1 safe.

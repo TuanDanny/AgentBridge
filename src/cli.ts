@@ -61,6 +61,7 @@ import {
 import { clearActiveProject, readActiveProject, selectActiveProject } from "./activeProject.js";
 import { formatDoctorText, formatSetupText, runDoctor, setupCodexLauncher, setupCodexPlugin, setupGptActions, setupRelay } from "./setupDoctor.js";
 import { type LauncherTunnelMode } from "./launcher.js";
+import { formatRelayProtocolSummary, getRelayProtocolSpec, validateRelayProtocolSpec } from "./relayProtocol.js";
 import {
   createCodexChangesSummary,
   createProjectInspectPacket,
@@ -1661,6 +1662,23 @@ program
     try {
       const result = await runDoctor(process.cwd(), { projectId: options.project, launcher: Boolean(options.launcher) });
       console.log(options.json ? JSON.stringify(result, null, 2) : formatDoctorText(result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+program
+  .command("relay")
+  .description("Inspect the experimental CodexLink relay protocol spec.")
+  .command("spec")
+  .description("Print the relay protocol allowlist and safety guardrails.")
+  .option("--json", "print JSON result")
+  .action((options: { json?: boolean }) => {
+    try {
+      const spec = getRelayProtocolSpec();
+      const validation = validateRelayProtocolSpec(spec);
+      const result = { ok: validation.ok, spec, validation };
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatRelayProtocolSummary(spec));
     } catch (error) {
       handleError(error);
     }
