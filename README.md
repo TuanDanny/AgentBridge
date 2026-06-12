@@ -59,6 +59,8 @@ The launcher starts the local server, waits for `/health`, bootstraps the shared
 
 Guide: `docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md`
 
+Backlog for zero-setup stable relay mode: `docs/architecture/CODEXLINK_ZERO_SETUP_RELAY_PLAN.md`
+
 ---
 
 ## Register A Local Project
@@ -233,7 +235,9 @@ Large safe text files are bounded and returned with truncation metadata instead 
 | v0.6 Shared session workspace memory | Passed |
 | v0.7 Codex plugin auto session | Passed |
 | v1.0 Activity Trace & Workspace Timeline | Passed |
-| v1.1 Safe Local Edit / Patch Proposal | Planned |
+| v1.1 One-Click Launcher | Local implemented |
+| v1.2 Zero-Setup Stable Relay | Planned/design |
+| v1.3 Safe Local Edit / Patch Proposal | Planned |
 | Docker packaging | Planned |
 
 ---
