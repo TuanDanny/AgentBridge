@@ -1,6 +1,7 @@
 param(
   [switch]$DryRun,
   [switch]$Install,
+  [Alias("NoBrowser")]
   [switch]$NoOpenBrowser,
   [switch]$NoClipboard
 )
@@ -84,16 +85,19 @@ function Invoke-Cli([string[]]$Args, [int]$TimeoutSec = 20) {
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
   $process = [System.Diagnostics.Process]::Start($psi)
+  $stdout = $process.StandardOutput.ReadToEndAsync()
+  $stderr = $process.StandardError.ReadToEndAsync()
   if (!$process.WaitForExit($TimeoutSec * 1000)) {
     try { $process.Kill() } catch {}
     throw "CLI command timed out."
   }
-  $stdout = $process.StandardOutput.ReadToEnd()
-  $stderr = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+  $stdoutText = $stdout.Result
+  $stderrText = $stderr.Result
   if ($process.ExitCode -ne 0) {
-    throw (($stderr + " " + $stdout).Trim())
+    throw (($stderrText + " " + $stdoutText).Trim())
   }
-  return $stdout
+  return $stdoutText
 }
 
 Set-Location $Root
@@ -177,8 +181,29 @@ if ($Config.projectId -and $Config.autoBootstrap) {
       $metadata = @{ local_url = $LocalUrl; public_url_configured = [bool]$Config.publicBaseUrl } | ConvertTo-Json -Compress
       Invoke-Cli @("dist\cli.js","session","activity-add",$Config.projectId,"--kind","launcher_started","--source","script","--summary","CodexLink one-click launcher started.","--metadata",$metadata,"--json") | Out-Null
       $bootstrap = Invoke-Cli @("dist\cli.js","session","bootstrap",$Config.projectId,"--source","one_click_launcher","--json")
-      $parsed = $bootstrap | ConvertFrom-Json
-      Say "Session bootstrap: PASS (project=$($Config.projectId), revision=$($parsed.revision), action=$($parsed.recommended_next_action))"
+      $revision = "unknown"
+      $action = "unknown"
+      $bootstrapText = ($bootstrap | Out-String)
+      $revisionMatch = [regex]::Match($bootstrapText, '"revision"\s*:\s*(\d+)')
+      if ($revisionMatch.Success) { $revision = $revisionMatch.Groups[1].Value }
+      $actionMatch = [regex]::Match($bootstrapText, '"recommended_next_action"\s*:\s*"([^"]+)"')
+      if ($actionMatch.Success) { $action = $actionMatch.Groups[1].Value }
+      if ($revision -eq "unknown" -or $action -eq "unknown") {
+        $summaryText = (Invoke-Cli @("dist\cli.js","session","summary",$Config.projectId,"--json") | Out-String)
+        if ($revision -eq "unknown") {
+          $summaryRevisionMatch = [regex]::Match($summaryText, '"revision"\s*:\s*(\d+)')
+          if ($summaryRevisionMatch.Success) { $revision = $summaryRevisionMatch.Groups[1].Value }
+        }
+        if ($action -eq "unknown") {
+          $summaryActionMatch = [regex]::Match($summaryText, '"recommended_next_action"\s*:\s*"([^"]+)"')
+          if ($summaryActionMatch.Success) { $action = $summaryActionMatch.Groups[1].Value }
+        }
+      }
+      if ($revision -eq "unknown" -and $action -eq "unknown") {
+        Say "Session bootstrap: PASS (project=$($Config.projectId))"
+      } else {
+        Say "Session bootstrap: PASS (project=$($Config.projectId), revision=$revision, action=$action)"
+      }
       Invoke-Cli @("dist\cli.js","session","context",$Config.projectId,"--compact","--json") | Out-Null
       Invoke-Cli @("dist\cli.js","session","activity-add",$Config.projectId,"--kind","launcher_ready","--source","script","--summary","CodexLink one-click launcher is ready.","--metadata",$metadata,"--json") | Out-Null
     }
@@ -190,6 +215,19 @@ if ($Config.projectId -and $Config.autoBootstrap) {
         Invoke-Cli @("dist\cli.js","session","activity-add",$Config.projectId,"--kind","launcher_warn","--source","script","--status","warning","--summary","CodexLink launcher bootstrap/context warning.","--metadata",$warningMetadata,"--json") | Out-Null
       }
     } catch {}
+  }
+}
+
+if ($Config.autoDoctor) {
+  try {
+    if ($DryRun) {
+      Say "Dry-run: would run doctor --launcher."
+    } else {
+      Invoke-Cli @("dist\cli.js","doctor","--launcher","--json") 30 | Out-Null
+      Say "Doctor launcher check: PASS"
+    }
+  } catch {
+    Warn "Doctor launcher check returned a warning: $($_.Exception.Message)"
   }
 }
 
