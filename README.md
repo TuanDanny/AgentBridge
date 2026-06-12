@@ -61,6 +61,8 @@ Guide: `docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md`
 
 Backlog for zero-setup stable relay mode: `docs/architecture/CODEXLINK_ZERO_SETUP_RELAY_PLAN.md`
 
+v1.2 roadmap: `docs/architecture/CODEXLINK_V1_2_ZERO_SETUP_ROADMAP.md`
+
 ---
 
 ## Register A Local Project
