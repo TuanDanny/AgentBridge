@@ -13,6 +13,7 @@ import {
   isQuickTunnelUrl,
   launcherWarnings,
   readLauncherConfig,
+  RELAY_MODE_WARNING,
   setupLauncher,
   type LauncherSetupOptions
 } from "./launcher.js";
@@ -349,6 +350,19 @@ function launcherReadinessCheck(root: string): DoctorCheck {
   }
 }
 
+function relayPlaceholderCheck(root: string): DoctorCheck {
+  const relayConfig = readJsonIfExists<{ enabled?: boolean; mode?: string }>(bridgePath(root, "relay-config.json"));
+  const launcher = readLauncherConfig(root);
+  if (launcher?.tunnelMode === "relay" || relayConfig) {
+    return warn(
+      "relay_mode",
+      RELAY_MODE_WARNING,
+      "Use a stable HTTPS endpoint now; only continue relay work after protocol, pairing, and security tests are specified."
+    );
+  }
+  return warn("relay_mode", "Relay mode is not configured. This is expected until v1.2 relay work begins.", "Use stable tunnel/domain for GPT Actions today.");
+}
+
 function sessionChecks(root: string, projectId: string): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   try {
@@ -553,7 +567,8 @@ export async function runDoctor(rootInput = process.cwd(), options: DoctorOption
       launcherPublicUrlCheck(root),
       await launcherPublicHealthCheck(root),
       launcherGptUrlCheck(root),
-      launcherReadinessCheck(root)
+      launcherReadinessCheck(root),
+      relayPlaceholderCheck(root)
     );
   }
   const ok = checks.every((item) => item.status !== "FAIL");
@@ -602,6 +617,49 @@ export function setupCodexLauncher(rootInput = process.cwd(), options: LauncherS
     checks,
     changed_files: result.changed_files,
     next_steps: result.next_steps
+  };
+}
+
+export function setupRelay(rootInput = process.cwd(), options: SetupOptions = {}): SetupResult {
+  const root = resolveProjectRoot(rootInput);
+  const checks: DoctorCheck[] = [
+    warn("relay_mode", RELAY_MODE_WARNING, "Use stable tunnel/domain for production until relay protocol and pairing are implemented."),
+    pass("relay_security_guardrails", "Relay setup placeholder adds no command runner, no file write capability, and no OpenAI API key requirement."),
+    pass("relay_docs", "Relay roadmap is documented for future implementation.")
+  ];
+  const changedFiles: string[] = [];
+  const relayConfig = bridgePath(root, "relay-config.json");
+  if (!options.dryRun) {
+    ensureDir(getBridgeDir(root));
+    writeText(
+      relayConfig,
+      `${JSON.stringify(
+        {
+          version: 1,
+          enabled: false,
+          mode: "planned",
+          relay_url: null,
+          pairing: "not_implemented",
+          note: "Relay mode is a local placeholder. Production relay is not implemented yet."
+        },
+        null,
+        2
+      )}\n`
+    );
+    changedFiles.push(".agentbridge/relay-config.json");
+  }
+  return {
+    ok: true,
+    dry_run: Boolean(options.dryRun),
+    root,
+    checks,
+    changed_files: changedFiles,
+    next_steps: [
+      "Use a stable public HTTPS endpoint today: setup launcher --public-url <url>.",
+      "Read docs/architecture/CODEXLINK_V1_2_ZERO_SETUP_ROADMAP.md before implementing relay.",
+      "Do not expose shell, write-file, local auth token, or raw file content through relay.",
+      "Prototype self-host relay before any hosted production relay."
+    ]
   };
 }
 

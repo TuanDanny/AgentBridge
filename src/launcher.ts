@@ -2,7 +2,7 @@ import { bridgePath, getBridgeDir, resolveProjectRoot } from "./paths.js";
 import { ensureDir, pathExists, readJsonIfExists, writeJson } from "./fsx.js";
 import { validateProjectId } from "./registry.js";
 
-export type LauncherTunnelMode = "none" | "quick" | "stable" | "external";
+export type LauncherTunnelMode = "none" | "quick" | "stable" | "external" | "relay";
 
 export interface LauncherConfig {
   projectId: string;
@@ -50,6 +50,8 @@ export interface LauncherSetupResult {
 
 export const QUICK_TUNNEL_WARNING =
   "Quick Tunnel URL is temporary. GPT Actions may need schema update after restart. Use a stable tunnel/domain for one-click GPTs usage.";
+export const RELAY_MODE_WARNING =
+  "Relay mode is planned/experimental. Until a relay is implemented and paired, GPT Actions still need a stable HTTPS endpoint.";
 
 export function launcherConfigPath(rootInput = process.cwd()): string {
   return bridgePath(resolveProjectRoot(rootInput), "launcher-config.json");
@@ -109,9 +111,15 @@ export function validateLauncherConfig(rootInput: string, input: Partial<Launche
 export function launcherWarnings(config: LauncherConfig): string[] {
   const warnings: string[] = [];
   if (!config.publicBaseUrl) {
-    warnings.push("No publicBaseUrl configured. Local server can start, but GPT Actions need a public HTTPS endpoint.");
+    warnings.push(
+      config.tunnelMode === "relay"
+        ? RELAY_MODE_WARNING
+        : "No publicBaseUrl configured. Local server can start, but GPT Actions need a public HTTPS endpoint."
+    );
   } else if (isQuickTunnelUrl(config.publicBaseUrl)) {
     warnings.push(QUICK_TUNNEL_WARNING);
+  } else if (config.tunnelMode === "relay") {
+    warnings.push(RELAY_MODE_WARNING);
   }
   return warnings;
 }
@@ -212,10 +220,10 @@ function validatePort(port: number): number {
 }
 
 function validateTunnelMode(mode: string): LauncherTunnelMode {
-  if (mode === "none" || mode === "quick" || mode === "stable" || mode === "external") {
+  if (mode === "none" || mode === "quick" || mode === "stable" || mode === "external" || mode === "relay") {
     return mode;
   }
-  throw new Error("Launcher tunnelMode must be one of none, quick, stable, external.");
+  throw new Error("Launcher tunnelMode must be one of none, quick, stable, external, relay.");
 }
 
 function validateOptionalHttpsUrl(value: string | undefined, field: string): string | undefined {

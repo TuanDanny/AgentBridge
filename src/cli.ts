@@ -59,7 +59,7 @@ import {
   searchProjectText
 } from "./projectFiles.js";
 import { clearActiveProject, readActiveProject, selectActiveProject } from "./activeProject.js";
-import { formatDoctorText, formatSetupText, runDoctor, setupCodexLauncher, setupCodexPlugin, setupGptActions } from "./setupDoctor.js";
+import { formatDoctorText, formatSetupText, runDoctor, setupCodexLauncher, setupCodexPlugin, setupGptActions, setupRelay } from "./setupDoctor.js";
 import { type LauncherTunnelMode } from "./launcher.js";
 import {
   createCodexChangesSummary,
@@ -1566,7 +1566,7 @@ setup
   .option("--port <port>", "local server port", "7777")
   .option("--public-url <url>", "stable HTTPS public base URL for GPT Actions")
   .option("--gpt-url <url>", "ChatGPT GPT URL to open after startup")
-  .option("--tunnel-mode <mode>", "none, quick, stable, or external")
+  .option("--tunnel-mode <mode>", "none, quick, stable, external, or relay")
   .option("--open-browser", "open the configured GPT URL")
   .option("--no-open-browser", "do not open the configured GPT URL")
   .option("--copy-greeting", "copy the GPT greeting prompt")
@@ -1615,6 +1615,20 @@ setup
       }
     }
   );
+
+setup
+  .command("relay")
+  .description("Print or create the experimental zero-setup relay placeholder config.")
+  .option("--dry-run", "validate relay planning mode without writing .agentbridge/relay-config.json")
+  .option("--json", "print JSON result")
+  .action((options: { dryRun?: boolean; json?: boolean }) => {
+    try {
+      const result = setupRelay(process.cwd(), { dryRun: Boolean(options.dryRun) });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatSetupText("CodexLink Relay Setup Placeholder", result));
+    } catch (error) {
+      handleError(error);
+    }
+  });
 
 setup
   .command("gpt-actions")

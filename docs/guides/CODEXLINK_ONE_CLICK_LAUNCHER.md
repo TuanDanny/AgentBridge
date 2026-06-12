@@ -92,6 +92,14 @@ Current choices:
 
 If no public URL is configured, the launcher will still start local CodexLink and copy the greeting, but GPT Actions cannot call your local machine directly.
 
+Relay planning placeholder:
+
+```powershell
+node dist\cli.js setup relay --dry-run
+```
+
+This command does not start or implement a production relay. It exists to make the future zero-setup path explicit while keeping v1.1 safe.
+
 ## Stable Endpoint Recommended
 
 Use a stable HTTPS URL or stable tunnel/domain for GPT Actions. Cloudflare quick tunnel URLs such as `*.trycloudflare.com` are temporary; GPT Actions may need schema updates when the URL changes.

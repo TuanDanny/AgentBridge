@@ -65,6 +65,14 @@ node dist\cli.js setup gpt-actions --public-url https://codexlink.example.com
 
 Quick tunnel URLs are temporary and may require schema updates.
 
+Relay planning placeholder:
+
+```powershell
+node dist\cli.js setup relay --dry-run
+```
+
+Relay mode is not production yet; it is the planned v1.2 path toward zero-setup GPT Actions without user-managed tunnels.
+
 Guide: `docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md`
 
 Backlog for zero-setup stable relay mode: `docs/architecture/CODEXLINK_ZERO_SETUP_RELAY_PLAN.md`

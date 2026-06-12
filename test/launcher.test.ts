@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   QUICK_TUNNEL_WARNING,
+  RELAY_MODE_WARNING,
   createLauncherGreeting,
   launcherConfigPath,
   setupLauncher,
@@ -50,6 +51,15 @@ describe("one-click launcher helpers", () => {
     });
     expect(result.config.tunnelMode).toBe("quick");
     expect(result.warnings).toContain(QUICK_TUNNEL_WARNING);
+  });
+
+  it("allows relay mode only as an experimental warning", () => {
+    const root = makeTempRoot();
+    const result = validateLauncherConfig(root, {
+      tunnelMode: "relay"
+    });
+    expect(result.config.tunnelMode).toBe("relay");
+    expect(result.warnings).toContain(RELAY_MODE_WARNING);
   });
 
   it("creates a GPT greeting without token-like content or mojibake", () => {

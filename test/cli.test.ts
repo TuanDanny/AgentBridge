@@ -617,6 +617,20 @@ describe("compiled CLI smoke tests", () => {
     expect(JSON.stringify(setup)).not.toContain("OPENAI_API_KEY");
   });
 
+  it("supports relay setup dry-run as a non-production placeholder", () => {
+    const registryRoot = makeTempRoot("agentbridge-cli-relay-");
+    const relayConfigPath = path.join(registryRoot, ".agentbridge", "relay-config.json");
+    const setup = JSON.parse(runCli(registryRoot, "setup", "relay", "--dry-run", "--json"));
+    expect(setup.ok).toBe(true);
+    expect(setup.dry_run).toBe(true);
+    expect(setup.changed_files).toEqual([]);
+    expect(setup.checks.some((item: { name: string; status: string }) => item.name === "relay_mode" && item.status === "WARN")).toBe(true);
+    expect(fs.existsSync(relayConfigPath)).toBe(false);
+    expect(JSON.stringify(setup)).not.toContain("local_token");
+    expect(JSON.stringify(setup)).not.toContain("Bearer ");
+    expect(JSON.stringify(setup)).not.toContain("OPENAI_API_KEY");
+  });
+
   it("keeps active project event logs local-only", () => {
     const ignored = run(process.cwd(), "git", ["check-ignore", "-v", ".agentbridge/active_project_events.jsonl"]);
     expect(ignored).toContain(".agentbridge/");

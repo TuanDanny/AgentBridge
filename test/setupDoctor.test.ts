@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { diagnoseHttpStatus, diagnoseSetupIssue, runDoctor, setupCodexLauncher, setupCodexPlugin } from "../src/setupDoctor.js";
+import { diagnoseHttpStatus, diagnoseSetupIssue, runDoctor, setupCodexLauncher, setupCodexPlugin, setupRelay } from "../src/setupDoctor.js";
 
 const tempRoots: string[] = [];
 
@@ -100,6 +100,22 @@ describe("CodexLink setup doctor", () => {
     expect(JSON.stringify(result)).not.toContain("local_token");
     expect(JSON.stringify(result)).not.toContain("Bearer ");
     expect(JSON.stringify(result)).not.toContain("OPENAI_API_KEY");
+  });
+
+  it("keeps relay setup as a safe placeholder", async () => {
+    const root = makeTempRoot();
+    const dryRun = setupRelay(root, { dryRun: true });
+    expect(dryRun.ok).toBe(true);
+    expect(dryRun.changed_files).toEqual([]);
+    expect(JSON.stringify(dryRun)).not.toContain("local_token");
+    expect(JSON.stringify(dryRun)).not.toContain("Bearer ");
+    expect(JSON.stringify(dryRun)).not.toContain("OPENAI_API_KEY");
+
+    const written = setupRelay(root);
+    expect(written.changed_files).toEqual([".agentbridge/relay-config.json"]);
+    const result = await runDoctor(root, { projectId: "DoctorProject", launcher: true });
+    const relay = result.checks.find((check) => check.name === "relay_mode");
+    expect(relay).toMatchObject({ status: "WARN" });
   });
 
   it("diagnoses common setup failures with actionable messages", () => {
