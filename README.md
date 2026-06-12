@@ -31,8 +31,23 @@ The backend/package name is still `agentbridge`, but the product name is **Codex
 ```powershell
 git clone https://github.com/TuanDanny/AgentBridge.git
 cd AgentBridge
+.\setup-codexlink-first-time.bat
+```
+
+The first-time setup script checks Node/npm, optionally pulls the latest `main`, installs dependencies, builds `dist/`, registers the current repo as a project, creates launcher config, and can start CodexLink.
+
+For automation or a no-prompt setup check:
+
+```powershell
+.\setup-codexlink-first-time.bat --defaults --no-start
+```
+
+If you prefer manual setup:
+
+```powershell
 npm install
 npm run build
+node dist\cli.js project register-current AgentBridge
 .\start-codexlink.bat
 ```
 

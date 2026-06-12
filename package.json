@@ -9,6 +9,9 @@
   "files": [
     "dist",
     "README.md",
+    "setup-codexlink-first-time.bat",
+    "start-codexlink.bat",
+    "stop-codexlink.bat",
     "DEMO.md",
     "docs/acceptance",
     "docs/architecture",

@@ -96,4 +96,43 @@ describe("one-click launcher helpers", () => {
     expect(result.changed_files).toEqual([".agentbridge/launcher-config.json"]);
     expect(fs.existsSync(launcherConfigPath(root))).toBe(true);
   });
+
+  it("ships first-time and daily launcher scripts without release or token actions", () => {
+    const repoRoot = process.cwd();
+    const firstTimeScript = fs.readFileSync(path.join(repoRoot, "setup-codexlink-first-time.bat"), "utf8");
+    const startScript = fs.readFileSync(path.join(repoRoot, "start-codexlink.bat"), "utf8");
+    const startPowerShell = fs.readFileSync(path.join(repoRoot, "scripts", "start-codexlink.ps1"), "utf8");
+    const stopScript = fs.readFileSync(path.join(repoRoot, "stop-codexlink.bat"), "utf8");
+    const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+
+    expect(firstTimeScript).toContain("CodexLink First-Time Setup");
+    expect(firstTimeScript).toContain("call npm install <nul");
+    expect(firstTimeScript).toContain("call npm run build <nul");
+    expect(firstTimeScript).toContain("--defaults   Use safe defaults");
+    expect(firstTimeScript).toContain("--no-start   Do not start CodexLink after setup.");
+    expect(firstTimeScript).toContain("Defaults mode: skipping git pull.");
+    expect(firstTimeScript).toContain('project register-current "%PROJECT_ID%" <nul');
+    expect(firstTimeScript).toContain('setup launcher --project "%PROJECT_ID%" <nul');
+    expect(firstTimeScript).toContain('doctor --launcher --project "%PROJECT_ID%" --json <nul');
+    expect(firstTimeScript).toContain("Start skipped by --no-start.");
+    expect(firstTimeScript).toContain("Non-interactive defaults mode complete.");
+    expect(firstTimeScript).toContain("Start CodexLink now? [Y/n]");
+    expect(startPowerShell).toContain('"doctor","--launcher","--project",$Config.projectId');
+    expect(startScript).toContain("scripts\\start-codexlink.ps1");
+    expect(stopScript).toContain("scripts\\stop-codexlink.ps1");
+
+    const combined = `${firstTimeScript}\n${startScript}\n${stopScript}`;
+    expect(combined).not.toMatch(/\.agentbridge[\\/]local_token/i);
+    expect(combined).not.toMatch(/\bBearer\b/);
+    expect(combined).not.toMatch(/\bOPENAI_API_KEY\b/);
+    expect(combined).not.toMatch(/\bsk-[A-Za-z0-9_=-]{8,}/);
+    expect(combined).not.toMatch(/\bgit\s+push\b/i);
+    expect(combined).not.toMatch(/\bgit\s+tag\b/i);
+    expect(combined).not.toMatch(/\bgh\s+release\b/i);
+    expect(combined).not.toMatch(/\bnpm\s+publish\b/i);
+
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining(["setup-codexlink-first-time.bat", "start-codexlink.bat", "stop-codexlink.bat"])
+    );
+  });
 });

@@ -6,14 +6,31 @@ It does not read or print `.agentbridge/local_token`, does not require an OpenAI
 
 ## First-Time Setup
 
-Install dependencies and build once:
+For a new machine or fresh clone, double-click:
+
+```text
+setup-codexlink-first-time.bat
+```
+
+The first-time setup script checks Node/npm, optionally pulls the latest `main`, installs dependencies, builds `dist/`, registers the current repo as a project, creates local launcher config, and can start CodexLink.
+
+For automation or a no-prompt setup check:
+
+```powershell
+.\setup-codexlink-first-time.bat --defaults --no-start
+```
+
+`--defaults` uses safe defaults: no git pull, the default project ID, no GPT URL, no public URL, and no quick tunnel. `--no-start` prevents launching the daily runner after setup.
+
+Manual equivalent:
 
 ```powershell
 npm install
 npm run build
+node dist\cli.js project register-current AgentBridge
 ```
 
-Then double-click:
+Daily use after setup:
 
 ```text
 start-codexlink.bat

@@ -234,7 +234,7 @@ if ($Config.autoDoctor) {
     if ($DryRun) {
       Say "Dry-run: would run doctor --launcher."
     } else {
-      Invoke-Cli @("dist\cli.js","doctor","--launcher","--json") 30 | Out-Null
+      Invoke-Cli @("dist\cli.js","doctor","--launcher","--project",$Config.projectId,"--json") 30 | Out-Null
       Say "Doctor launcher check: PASS"
     }
   } catch {
