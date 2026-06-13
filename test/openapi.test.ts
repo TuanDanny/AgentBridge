@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const specPath = path.resolve("openapi.agentbridge.json");
 const gptActionsSpecPath = path.resolve("openapi.agentbridge.gpt-actions.json");
+const relayGptActionsSpecPath = path.resolve("openapi.codexlink.relay.gpt-actions.json");
 
 interface OperationSpec {
   operationId?: string;
@@ -259,5 +260,63 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
         maximum: 10000
       });
     }
+  });
+
+  it("provides a relay GPT Actions schema for paired metadata routes only", () => {
+    const content = fs.readFileSync(relayGptActionsSpecPath, "utf8");
+    const spec = JSON.parse(content) as OpenApiSpec;
+
+    expect(spec.openapi).toBe("3.1.0");
+    expect(spec.servers[0].url).toBe("https://relay.codexlink.example.com");
+    expect(Object.keys(spec.paths)).toEqual([
+      "/relay/health",
+      "/relay/pair",
+      "/chatgpt/projects",
+      "/chatgpt/projects/{projectId}/session/summary",
+      "/chatgpt/projects/{projectId}/session/context",
+      "/chatgpt/projects/{projectId}/session/timeline"
+    ]);
+    expect(spec.paths["/relay/health"].get.operationId).toBe("relayHealth");
+    expect(spec.paths["/relay/pair"].post.operationId).toBe("pairDevice");
+    expect(spec.paths["/chatgpt/projects"].get.operationId).toBe("listProjects");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/summary"].get.operationId).toBe("getSessionSummary");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/context"].get.operationId).toBe("getSessionContext");
+    expect(spec.paths["/chatgpt/projects/{projectId}/session/timeline"].get.operationId).toBe("getSessionTimeline");
+    expect(spec.components.schemas).toBeDefined();
+    expect(spec.components.securitySchemes.relaySession).toMatchObject({
+      type: "apiKey",
+      in: "header",
+      name: "X-CodexLink-Relay-Session"
+    });
+
+    for (const operation of operations(spec)) {
+      for (const parameter of operation.parameters ?? []) {
+        expect(parameter).not.toHaveProperty("$ref");
+        expect(typeof parameter.name).toBe("string");
+        expect(typeof parameter.in).toBe("string");
+        expect(typeof parameter.required).toBe("boolean");
+        expect(typeof parameter.description).toBe("string");
+        expect(parameter.schema).toBeDefined();
+      }
+      expect(typeof operation.description).toBe("string");
+      expect(operation.description?.length).toBeLessThanOrEqual(300);
+    }
+
+    const pairSchema = jsonRequestBodySchema(spec.paths["/relay/pair"].post);
+    expect(pairSchema).toMatchObject({
+      type: "object",
+      required: ["code", "gpt_session"],
+      additionalProperties: false
+    });
+    expect(Object.keys(pairSchema?.properties as Record<string, unknown>)).toEqual(["code", "gpt_session"]);
+
+    expect(content).not.toContain("/mcp");
+    expect(content).not.toContain("local_token");
+    expect(content).not.toContain(".agentbridge/local_token");
+    expect(content).not.toContain("Bearer ");
+    expect(content).not.toContain("OPENAI_API_KEY=");
+    expect(content).not.toContain("sk-");
+    expect(content).not.toContain("write-file");
+    expect(content).not.toContain("command runner");
   });
 });

@@ -85,9 +85,19 @@ Relay planning placeholder:
 ```powershell
 node dist\cli.js setup relay --dry-run
 node dist\cli.js relay spec
+node dist\cli.js relay pairing create
+node dist\cli.js relay serve --experimental
 ```
 
 Relay mode is not production yet; it is the planned v1.2 path toward zero-setup GPT Actions without user-managed tunnels.
+
+Relay GPT Actions schema prototype:
+
+```text
+openapi.codexlink.relay.gpt-actions.json
+```
+
+Use the regular `openapi.agentbridge.gpt-actions.json` for direct stable tunnel/domain setup today. The relay schema is for a future trusted relay origin and paired metadata routes only.
 
 Guide: `docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md`
 

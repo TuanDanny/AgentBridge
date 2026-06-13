@@ -124,6 +124,22 @@ The prototype:
 
 This is not the stable hosted relay endpoint needed for final zero-setup GPT Actions. That still requires a hardened HTTPS/WSS relay service and end-to-end security review.
 
+## GPT Actions Relay Schema
+
+Prototype schema:
+
+```text
+openapi.codexlink.relay.gpt-actions.json
+```
+
+This schema uses the placeholder server:
+
+```text
+https://relay.codexlink.example.com
+```
+
+It only contains relay health, pairing, project picker, session summary, compact context, and timeline metadata routes. Use the direct `openapi.agentbridge.gpt-actions.json` schema for stable tunnel/domain mode today.
+
 ## Forbidden Capabilities
 
 - No arbitrary shell or command runner.

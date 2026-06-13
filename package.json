@@ -24,6 +24,7 @@
     "scripts",
     "openapi.agentbridge.json",
     "openapi.agentbridge.gpt-actions.json",
+    "openapi.codexlink.relay.gpt-actions.json",
     "SESSION_SCHEMA.json",
     "GUIDE.md"
   ],
