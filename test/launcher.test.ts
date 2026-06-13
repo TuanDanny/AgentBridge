@@ -56,10 +56,16 @@ describe("one-click launcher helpers", () => {
   it("allows relay mode only as an experimental warning", () => {
     const root = makeTempRoot();
     const result = validateLauncherConfig(root, {
-      tunnelMode: "relay"
+      tunnelMode: "relay",
+      relayHost: "127.0.0.1",
+      relayPort: 8787
     });
     expect(result.config.tunnelMode).toBe("relay");
+    expect(result.config.relayHost).toBe("127.0.0.1");
+    expect(result.config.relayPort).toBe(8787);
+    expect(result.config.autoRelay).toBe(true);
     expect(result.warnings).toContain(RELAY_MODE_WARNING);
+    expect(() => validateLauncherConfig(root, { tunnelMode: "relay", relayHost: "0.0.0.0" })).toThrow(/loopback/);
   });
 
   it("creates a GPT greeting without token-like content or mojibake", () => {
@@ -110,7 +116,7 @@ describe("one-click launcher helpers", () => {
     );
     expect(result.next_steps).toContain("Use node dist/cli.js relay pairing create to create a short-lived pairing code.");
     expect(result.next_steps).toContain(
-      "For local prototype testing only, run node dist/cli.js relay serve --experimental."
+      "The launcher can auto-start the loopback relay prototype at http://127.0.0.1:8787."
     );
   });
 
@@ -120,6 +126,7 @@ describe("one-click launcher helpers", () => {
     const startScript = fs.readFileSync(path.join(repoRoot, "start-codexlink.bat"), "utf8");
     const startPowerShell = fs.readFileSync(path.join(repoRoot, "scripts", "start-codexlink.ps1"), "utf8");
     const stopScript = fs.readFileSync(path.join(repoRoot, "stop-codexlink.bat"), "utf8");
+    const stopPowerShell = fs.readFileSync(path.join(repoRoot, "scripts", "stop-codexlink.ps1"), "utf8");
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 
     expect(firstTimeScript).toContain("CodexLink First-Time Setup");
@@ -138,9 +145,13 @@ describe("one-click launcher helpers", () => {
     expect(startPowerShell).not.toContain("ArgumentList.Add");
     expect(startPowerShell).toContain('"doctor","--launcher","--project",$Config.projectId');
     expect(startPowerShell).toContain("Relay GPT Actions schema: openapi.codexlink.relay.gpt-actions.json");
+    expect(startPowerShell).toContain("Relay prototype: PASS");
+    expect(startPowerShell).toContain('"relay","serve","--experimental","--host",$Config.relayHost');
     expect(startPowerShell).toContain('"relay","pairing","create","--json"');
     expect(startPowerShell).toContain("Say-ConsoleOnly \"Relay pairing code:");
     expect(startPowerShell).toContain("Relay mode note: use the relay GPT Actions schema only with a trusted relay origin.");
+    expect(stopPowerShell).toContain("relay_process_id");
+    expect(stopPowerShell).toContain("Relay prototype stopped");
     expect(startScript).toContain("scripts\\start-codexlink.ps1");
     expect(stopScript).toContain("scripts\\stop-codexlink.ps1");
 

@@ -125,7 +125,15 @@ node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay
 start-codexlink.bat
 ```
 
-When relay mode is configured, the launcher still starts the local AgentBridge server and bootstraps the shared session. It also creates a short-lived relay pairing code, prints it once for the user, and adds relay instructions to the copied GPT greeting. The raw pairing code is not written to the launcher log. Use `openapi.codexlink.relay.gpt-actions.json` only with a trusted relay origin. The included `relay serve --experimental` command is a local prototype, not a hosted production relay.
+When relay mode is configured, the launcher still starts the local AgentBridge server and bootstraps the shared session. It also starts or reuses the loopback-only relay prototype at `http://127.0.0.1:8787`, creates a short-lived relay pairing code, prints it once for the user, and adds relay instructions to the copied GPT greeting. The raw pairing code is not written to the launcher log. Use `openapi.codexlink.relay.gpt-actions.json` only with a trusted relay origin. The included `relay serve --experimental` command is a local prototype, not a hosted production relay.
+
+To change the local relay prototype port:
+
+```powershell
+node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay --relay-port 8788
+```
+
+`relayHost` is intentionally restricted to loopback hosts (`127.0.0.1`, `localhost`, or `::1`) so the prototype is not accidentally exposed.
 
 ## Stable Endpoint Recommended
 

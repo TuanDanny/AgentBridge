@@ -1571,6 +1571,10 @@ setup
   .option("--public-url <url>", "stable HTTPS public base URL for GPT Actions")
   .option("--gpt-url <url>", "ChatGPT GPT URL to open after startup")
   .option("--tunnel-mode <mode>", "none, quick, stable, external, or relay")
+  .option("--relay-host <host>", "loopback relay prototype host", "127.0.0.1")
+  .option("--relay-port <port>", "loopback relay prototype port", "8787")
+  .option("--auto-relay", "auto-start loopback relay prototype in relay mode")
+  .option("--no-auto-relay", "do not auto-start loopback relay prototype")
   .option("--open-browser", "open the configured GPT URL")
   .option("--no-open-browser", "do not open the configured GPT URL")
   .option("--copy-greeting", "copy the GPT greeting prompt")
@@ -1589,6 +1593,9 @@ setup
       publicUrl?: string;
       gptUrl?: string;
       tunnelMode?: string;
+      relayHost?: string;
+      relayPort: string;
+      autoRelay?: boolean;
       openBrowser?: boolean;
       copyGreeting?: boolean;
       autoBootstrap?: boolean;
@@ -1600,6 +1607,10 @@ setup
         if (!Number.isInteger(port) || port < 1 || port > 65535) {
           throw new Error("Port must be an integer from 1 to 65535.");
         }
+        const relayPort = Number.parseInt(options.relayPort, 10);
+        if (!Number.isInteger(relayPort) || relayPort < 1 || relayPort > 65535) {
+          throw new Error("Relay port must be an integer from 1 to 65535.");
+        }
         const result = setupCodexLauncher(process.cwd(), {
           dryRun: Boolean(options.dryRun),
           projectId: options.project,
@@ -1608,6 +1619,9 @@ setup
           publicBaseUrl: options.publicUrl,
           gptUrl: options.gptUrl,
           tunnelMode: options.tunnelMode as LauncherTunnelMode | undefined,
+          relayHost: options.relayHost,
+          relayPort,
+          autoRelay: options.autoRelay,
           openBrowser: options.openBrowser,
           copyGreetingToClipboard: options.copyGreeting,
           autoBootstrap: options.autoBootstrap,

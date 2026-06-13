@@ -98,6 +98,8 @@ node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay
 
 In relay mode the launcher starts the local AgentBridge side, prepares a short-lived pairing code, and tells you which relay GPT Actions schema/prototype command to use. Relay mode is still experimental/local-only; it is the planned v1.2 path toward zero-setup GPT Actions without user-managed tunnels, not a production hosted relay yet.
 
+By default relay mode also starts the loopback-only relay prototype at `http://127.0.0.1:8787` and records its process id in local launcher state so `stop-codexlink.bat` can stop it. This prototype is only for local relay UX testing; it is not a hosted stable relay.
+
 Relay GPT Actions schema prototype:
 
 ```text

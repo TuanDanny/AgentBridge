@@ -15,6 +15,9 @@ export interface LauncherConfig {
   autoBootstrap: boolean;
   autoDoctor: boolean;
   tunnelMode: LauncherTunnelMode;
+  relayHost: string;
+  relayPort: number;
+  autoRelay: boolean;
 }
 
 export interface LauncherSetupOptions {
@@ -29,6 +32,9 @@ export interface LauncherSetupOptions {
   autoBootstrap?: boolean;
   autoDoctor?: boolean;
   tunnelMode?: LauncherTunnelMode;
+  relayHost?: string;
+  relayPort?: number;
+  autoRelay?: boolean;
 }
 
 export interface LauncherValidationResult {
@@ -67,7 +73,10 @@ export function defaultLauncherConfig(rootInput = process.cwd()): LauncherConfig
     copyGreetingToClipboard: true,
     autoBootstrap: true,
     autoDoctor: true,
-    tunnelMode: "stable"
+    tunnelMode: "stable",
+    relayHost: "127.0.0.1",
+    relayPort: 8787,
+    autoRelay: true
   };
 }
 
@@ -88,6 +97,8 @@ export function validateLauncherConfig(rootInput: string, input: Partial<Launche
   const publicBaseUrl = validateOptionalHttpsUrl(input.publicBaseUrl, "publicBaseUrl");
   const gptUrl = validateOptionalHttpUrl(input.gptUrl, "gptUrl");
   const tunnelMode = validateTunnelMode(input.tunnelMode ?? inferTunnelMode(publicBaseUrl, defaults.tunnelMode));
+  const relayHost = validateRelayHost(input.relayHost ?? defaults.relayHost);
+  const relayPort = validatePort(input.relayPort ?? defaults.relayPort, "Launcher relayPort");
   const config: LauncherConfig = {
     projectId,
     host,
@@ -96,7 +107,10 @@ export function validateLauncherConfig(rootInput: string, input: Partial<Launche
     copyGreetingToClipboard: input.copyGreetingToClipboard ?? defaults.copyGreetingToClipboard,
     autoBootstrap: input.autoBootstrap ?? defaults.autoBootstrap,
     autoDoctor: input.autoDoctor ?? defaults.autoDoctor,
-    tunnelMode
+    tunnelMode,
+    relayHost,
+    relayPort,
+    autoRelay: input.autoRelay ?? defaults.autoRelay
   };
   if (publicBaseUrl) {
     config.publicBaseUrl = publicBaseUrl;
@@ -138,7 +152,10 @@ export function setupLauncher(rootInput = process.cwd(), options: LauncherSetupO
     copyGreetingToClipboard: options.copyGreetingToClipboard ?? existing.copyGreetingToClipboard,
     autoBootstrap: options.autoBootstrap ?? existing.autoBootstrap,
     autoDoctor: options.autoDoctor ?? existing.autoDoctor,
-    tunnelMode: options.tunnelMode ?? existing.tunnelMode
+    tunnelMode: options.tunnelMode ?? existing.tunnelMode,
+    relayHost: options.relayHost ?? existing.relayHost,
+    relayPort: options.relayPort ?? existing.relayPort,
+    autoRelay: options.autoRelay ?? existing.autoRelay
   });
   const changedFiles: string[] = [];
   const configPath = launcherConfigPath(root);
@@ -191,7 +208,8 @@ function launcherNextSteps(config: LauncherConfig): string[] {
       ...base,
       "Import openapi.codexlink.relay.gpt-actions.json only when using a trusted relay origin.",
       "Use node dist/cli.js relay pairing create to create a short-lived pairing code.",
-      "For local prototype testing only, run node dist/cli.js relay serve --experimental.",
+      `The launcher can auto-start the loopback relay prototype at http://${config.relayHost}:${config.relayPort}.`,
+      "For manual local prototype testing, run node dist/cli.js relay serve --experimental.",
       "Use a stable public URL/domain until a production relay is available."
     ];
   }
@@ -224,11 +242,19 @@ function validateHost(host: string): string {
   return trimmed;
 }
 
-function validatePort(port: number): number {
+function validatePort(port: number, label = "Launcher port"): number {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error("Launcher port must be an integer from 1 to 65535.");
+    throw new Error(`${label} must be an integer from 1 to 65535.`);
   }
   return port;
+}
+
+function validateRelayHost(host: string): string {
+  const trimmed = validateHost(host);
+  if (trimmed !== "127.0.0.1" && trimmed !== "localhost" && trimmed !== "::1") {
+    throw new Error("Launcher relayHost must be loopback: 127.0.0.1, localhost, or ::1.");
+  }
+  return trimmed;
 }
 
 function validateTunnelMode(mode: string): LauncherTunnelMode {

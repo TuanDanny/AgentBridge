@@ -75,10 +75,13 @@ function Read-Config {
     autoBootstrap = $true
     autoDoctor = $true
     tunnelMode = "stable"
+    relayHost = "127.0.0.1"
+    relayPort = 8787
+    autoRelay = $true
   }
   if (Test-Path $ConfigFile) {
     $loaded = Get-Content $ConfigFile -Raw | ConvertFrom-Json
-    foreach ($key in @("projectId","host","port","publicBaseUrl","gptUrl","openBrowser","copyGreetingToClipboard","autoBootstrap","autoDoctor","tunnelMode")) {
+    foreach ($key in @("projectId","host","port","publicBaseUrl","gptUrl","openBrowser","copyGreetingToClipboard","autoBootstrap","autoDoctor","tunnelMode","relayHost","relayPort","autoRelay")) {
       if ($null -ne $loaded.$key) { $defaults[$key] = $loaded.$key }
     }
   }
@@ -155,6 +158,10 @@ $Started = $false
 $RelayMode = ([string]$Config.tunnelMode -eq "relay")
 $RelayPairingCode = $null
 $RelayPairingExpiresAt = $null
+$RelayUrl = "http://$($Config.relayHost):$($Config.relayPort)"
+$RelayHealthUrl = "$RelayUrl/relay/health"
+$RelayStarted = $false
+$RelayProcess = $null
 
 if (Test-Health $HealthUrl) {
   Say "Local server: PASS ($HealthUrl)"
@@ -176,7 +183,30 @@ if (Test-Health $HealthUrl) {
 if ($RelayMode) {
   Warn "Relay mode is experimental/local-only. Hosted stable relay is not production-ready yet."
   Say "Relay GPT Actions schema: openapi.codexlink.relay.gpt-actions.json"
-  Say "Relay prototype command: node dist\cli.js relay serve --experimental --host 127.0.0.1 --port 8787"
+  Say "Relay prototype command: node dist\cli.js relay serve --experimental --host $($Config.relayHost) --port $($Config.relayPort)"
+  if ($Config.autoRelay) {
+    if (Test-Health $RelayHealthUrl) {
+      Say "Relay prototype: PASS ($RelayHealthUrl)"
+    } elseif ($DryRun) {
+      Say "Dry-run: would start relay prototype at $RelayUrl."
+    } else {
+      Say "Starting relay prototype at $RelayUrl"
+      $RelayProcess = Start-Process -FilePath "node" -ArgumentList @("dist\cli.js","relay","serve","--experimental","--host",$Config.relayHost,"--port",[string]$Config.relayPort) -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+      $RelayStarted = $true
+      $relayReady = $false
+      for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Milliseconds 500
+        if (Test-Health $RelayHealthUrl) { $relayReady = $true; break }
+      }
+      if ($relayReady) {
+        Say "Relay prototype: PASS ($RelayHealthUrl)"
+      } else {
+        Warn "Relay prototype health did not pass at $RelayHealthUrl."
+      }
+    }
+  } else {
+    Say "Relay prototype auto-start disabled."
+  }
   if ($DryRun) {
     Say "Dry-run: would create a short-lived relay pairing code."
   } else {
@@ -202,15 +232,18 @@ if ($RelayMode) {
   Say "For true GPT Actions one-click, run setup launcher with --public-url or configure experimental --tunnel-mode relay."
 }
 
-if (!$DryRun -and $Started) {
+if (!$DryRun -and ($Started -or $RelayStarted)) {
   $state = [ordered]@{
     started_at = (Get-Date).ToUniversalTime().ToString("o")
     host = $Config.host
     port = $Config.port
     local_url = $LocalUrl
-    process_id = $process.Id
+    process_id = if ($Started -and $process) { $process.Id } else { $null }
     project_id = $Config.projectId
     public_base_url = $Config.publicBaseUrl
+    relay_mode = $RelayMode
+    relay_url = if ($RelayMode) { $RelayUrl } else { $null }
+    relay_process_id = if ($RelayStarted -and $RelayProcess) { $RelayProcess.Id } else { $null }
   }
   $state | ConvertTo-Json -Depth 5 | Set-Content -Path $StateFile -Encoding UTF8
 }
