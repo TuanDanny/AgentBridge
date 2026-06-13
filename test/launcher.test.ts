@@ -127,6 +127,7 @@ describe("one-click launcher helpers", () => {
     const startPowerShell = fs.readFileSync(path.join(repoRoot, "scripts", "start-codexlink.ps1"), "utf8");
     const stopScript = fs.readFileSync(path.join(repoRoot, "stop-codexlink.bat"), "utf8");
     const stopPowerShell = fs.readFileSync(path.join(repoRoot, "scripts", "stop-codexlink.ps1"), "utf8");
+    const relaySmoke = fs.readFileSync(path.join(repoRoot, "scripts", "smoke-v12-relay-loopback.ps1"), "utf8");
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 
     expect(firstTimeScript).toContain("CodexLink First-Time Setup");
@@ -152,10 +153,17 @@ describe("one-click launcher helpers", () => {
     expect(startPowerShell).toContain("Relay mode note: use the relay GPT Actions schema only with a trusted relay origin.");
     expect(stopPowerShell).toContain("relay_process_id");
     expect(stopPowerShell).toContain("Relay prototype stopped");
+    expect(relaySmoke).toContain("/relay/pair");
+    expect(relaySmoke).toContain("/chatgpt/projects/$ProjectId/session/summary");
+    expect(relaySmoke).toContain("OKKK");
     expect(startScript).toContain("scripts\\start-codexlink.ps1");
     expect(stopScript).toContain("scripts\\stop-codexlink.ps1");
 
-    const combined = `${firstTimeScript}\n${startScript}\n${stopScript}`;
+    expect(relaySmoke).not.toMatch(/\bBearer\s+[A-Za-z0-9_=-]{8,}/);
+    expect(relaySmoke).not.toMatch(/\bOPENAI_API_KEY\s*=\s*sk-/);
+    expect(relaySmoke).not.toMatch(/\bsk-[A-Za-z0-9_=-]{8,}/);
+
+    const combined = `${firstTimeScript}\n${startScript}\n${stopScript}\n${startPowerShell}\n${stopPowerShell}`;
     expect(combined).not.toMatch(/\.agentbridge[\\/]local_token/i);
     expect(combined).not.toMatch(/\bBearer\b/);
     expect(combined).not.toMatch(/\bOPENAI_API_KEY\b/);

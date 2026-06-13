@@ -100,6 +100,12 @@ In relay mode the launcher starts the local AgentBridge side, prepares a short-l
 
 By default relay mode also starts the loopback-only relay prototype at `http://127.0.0.1:8787` and records its process id in local launcher state so `stop-codexlink.bat` can stop it. This prototype is only for local relay UX testing; it is not a hosted stable relay.
 
+Relay loopback smoke:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-relay-loopback.ps1
+```
+
 Relay GPT Actions schema prototype:
 
 ```text

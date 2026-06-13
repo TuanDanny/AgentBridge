@@ -1,8 +1,8 @@
 # CodexLink Relay Protocol Spec
 
-Status: spec-only.
+Status: experimental loopback prototype.
 
-This spec supports the v1.2 zero-setup roadmap. It does not implement or start a relay server.
+This spec supports the v1.2 zero-setup roadmap. It includes a local-only relay prototype for safety testing; it is not a hosted production relay server.
 
 ## Transport
 
@@ -123,6 +123,14 @@ The prototype:
 - does not expose shell, write-file, scan, raw file content, raw diff, or long terminal output
 
 This is not the stable hosted relay endpoint needed for final zero-setup GPT Actions. That still requires a hardened HTTPS/WSS relay service and end-to-end security review.
+
+Loopback acceptance smoke:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-relay-loopback.ps1
+```
+
+The smoke test bootstraps a local session, creates a short-lived pairing code, starts the loopback relay prototype, pairs a fake GPT session, calls project/session metadata routes through the relay, checks `/mcp` stays unavailable, and verifies secret-like text is not returned.
 
 ## GPT Actions Relay Schema
 
