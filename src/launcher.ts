@@ -51,7 +51,7 @@ export interface LauncherSetupResult {
 export const QUICK_TUNNEL_WARNING =
   "Quick Tunnel URL is temporary. GPT Actions may need schema update after restart. Use a stable tunnel/domain for one-click GPTs usage.";
 export const RELAY_MODE_WARNING =
-  "Relay mode is planned/experimental. Until a relay is implemented and paired, GPT Actions still need a stable HTTPS endpoint.";
+  "Relay mode is experimental. The launcher can prepare local pairing metadata and the relay GPT Actions schema, but a hosted stable relay is not production-ready yet.";
 
 export function launcherConfigPath(rootInput = process.cwd()): string {
   return bridgePath(resolveProjectRoot(rootInput), "launcher-config.json");
@@ -156,35 +156,47 @@ export function setupLauncher(rootInput = process.cwd(), options: LauncherSetupO
     warnings,
     changed_files: changedFiles,
     greeting: createLauncherGreeting(),
-    next_steps: [
-      "Run npm install if dependencies are missing.",
-      "Run npm run build before first use.",
-      "Double click start-codexlink.bat for daily use.",
-      "Paste the copied greeting into the configured GPT.",
-      "Use a stable public URL/domain for reliable GPT Actions."
-    ]
+    next_steps: launcherNextSteps(config)
   };
 }
 
 export function createLauncherGreeting(): string {
   return [
-    "Xin chào CodexLink.",
+    "Xin chao CodexLink.",
     "",
-    "Hãy gọi listProjects, chọn project mặc định nếu có, rồi gọi getSessionSummary hoặc getSessionContext cho project đó.",
+    "Hay goi listProjects, chon project mac dinh neu co, roi goi getSessionSummary hoac getSessionContext cho project do.",
     "",
-    "Sau đó cho tôi biết:",
-    "- project đang active",
+    "Sau do cho toi biet:",
+    "- project dang active",
     "- session_id/revision",
     "- current_goal",
     "- phase/status",
     "- recent_activity",
-    "- workspace snapshot/gaps nếu có",
+    "- workspace snapshot/gaps neu co",
     "- recommended_next_action",
     "",
-    "Không đọc repo nếu chưa cần."
+    "Khong doc repo neu chua can."
   ].join("\n");
 }
 
+function launcherNextSteps(config: LauncherConfig): string[] {
+  const base = [
+    "Run npm install if dependencies are missing.",
+    "Run npm run build before first use.",
+    "Double click start-codexlink.bat for daily use.",
+    "Paste the copied greeting into the configured GPT."
+  ];
+  if (config.tunnelMode === "relay") {
+    return [
+      ...base,
+      "Import openapi.codexlink.relay.gpt-actions.json only when using a trusted relay origin.",
+      "Use node dist/cli.js relay pairing create to create a short-lived pairing code.",
+      "For local prototype testing only, run node dist/cli.js relay serve --experimental.",
+      "Use a stable public URL/domain until a production relay is available."
+    ];
+  }
+  return [...base, "Use a stable public URL/domain for reliable GPT Actions."];
+}
 export function isQuickTunnelUrl(url: string): boolean {
   try {
     return new URL(url).hostname.toLowerCase().endsWith(".trycloudflare.com");

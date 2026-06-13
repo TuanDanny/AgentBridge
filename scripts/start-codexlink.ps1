@@ -33,6 +33,10 @@ function Say([string]$Message) {
   Log-Line $Message
 }
 
+function Say-ConsoleOnly([string]$Message) {
+  [Console]::Out.WriteLine($Message)
+}
+
 function Warn([string]$Message) {
   Write-Host "WARN: $Message" -ForegroundColor Yellow
   Log-Line "WARN: $Message"
@@ -51,6 +55,12 @@ function Test-Health([string]$Url) {
   } catch {
     return $false
   }
+}
+
+function ConvertTo-ProcessArgument([string]$Arg) {
+  if ($null -eq $Arg) { return '""' }
+  if ($Arg -notmatch '[\s"]') { return $Arg }
+  return '"' + $Arg.Replace('"', '\"') + '"'
 }
 
 function Read-Config {
@@ -75,10 +85,10 @@ function Read-Config {
   return [pscustomobject]$defaults
 }
 
-function Invoke-Cli([string[]]$Args, [int]$TimeoutSec = 20) {
+function Invoke-Cli([string[]]$CliArgs, [int]$TimeoutSec = 20) {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = "node"
-  foreach ($arg in $Args) { [void]$psi.ArgumentList.Add($arg) }
+  $psi.Arguments = (($CliArgs | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join " ")
   $psi.WorkingDirectory = $Root
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
@@ -142,6 +152,9 @@ $Config = Read-Config
 $LocalUrl = "http://$($Config.host):$($Config.port)"
 $HealthUrl = "$LocalUrl/health"
 $Started = $false
+$RelayMode = ([string]$Config.tunnelMode -eq "relay")
+$RelayPairingCode = $null
+$RelayPairingExpiresAt = $null
 
 if (Test-Health $HealthUrl) {
   Say "Local server: PASS ($HealthUrl)"
@@ -160,7 +173,25 @@ if (Test-Health $HealthUrl) {
   Say "Local server: PASS ($HealthUrl)"
 }
 
-if ($Config.publicBaseUrl) {
+if ($RelayMode) {
+  Warn "Relay mode is experimental/local-only. Hosted stable relay is not production-ready yet."
+  Say "Relay GPT Actions schema: openapi.codexlink.relay.gpt-actions.json"
+  Say "Relay prototype command: node dist\cli.js relay serve --experimental --host 127.0.0.1 --port 8787"
+  if ($DryRun) {
+    Say "Dry-run: would create a short-lived relay pairing code."
+  } else {
+    try {
+      $pairingJson = Invoke-Cli @("dist\cli.js","relay","pairing","create","--json")
+      $pairing = $pairingJson | ConvertFrom-Json
+      $RelayPairingCode = [string]($pairing | Select-Object -ExpandProperty code)
+      $RelayPairingExpiresAt = [string]($pairing | Select-Object -ExpandProperty expires_at)
+      Say "Relay pairing: PASS (short-lived code printed once; expires=$RelayPairingExpiresAt)"
+      Say-ConsoleOnly "Relay pairing code: $RelayPairingCode"
+    } catch {
+      Warn "Relay pairing create failed: $($_.Exception.Message)"
+    }
+  }
+} elseif ($Config.publicBaseUrl) {
   if ([string]$Config.publicBaseUrl -match "trycloudflare\.com") {
     Warn "Quick Tunnel URL is temporary. GPT Actions may need schema update after restart. Use a stable tunnel/domain for one-click GPTs usage."
   } else {
@@ -168,7 +199,7 @@ if ($Config.publicBaseUrl) {
   }
 } else {
   Warn "Configured public URL: WARN (missing). GPT Actions need an HTTPS public endpoint."
-  Say "For true GPT Actions one-click, run setup launcher with --public-url or use the future relay mode."
+  Say "For true GPT Actions one-click, run setup launcher with --public-url or configure experimental --tunnel-mode relay."
 }
 
 if (!$DryRun -and $Started) {
@@ -242,22 +273,33 @@ if ($Config.autoDoctor) {
   }
 }
 
-$Greeting = @"
-Xin chào CodexLink.
-
-Hãy gọi listProjects, chọn project mặc định nếu có, rồi gọi getSessionSummary hoặc getSessionContext cho project đó.
-
-Sau đó cho tôi biết:
-- project đang active
-- session_id/revision
-- current_goal
-- phase/status
-- recent_activity
-- workspace snapshot/gaps nếu có
-- recommended_next_action
-
-Không đọc repo nếu chưa cần.
-"@
+$GreetingLines = @(
+  "Xin chao CodexLink.",
+  "",
+  "Hay goi listProjects, chon project mac dinh neu co, roi goi getSessionSummary hoac getSessionContext cho project do.",
+  "",
+  "Sau do cho toi biet:",
+  "- project dang active",
+  "- session_id/revision",
+  "- current_goal",
+  "- phase/status",
+  "- recent_activity",
+  "- workspace snapshot/gaps neu co",
+  "- recommended_next_action",
+  "",
+  "Khong doc repo neu chua can."
+)
+if ($RelayMode) {
+  $GreetingLines += @(
+    "",
+    "Relay mode note: use the relay GPT Actions schema only with a trusted relay origin.",
+    "First call pairDevice if available, then listProjects/getSessionSummary."
+  )
+  if ($RelayPairingCode) {
+    $GreetingLines += "Relay pairing code: $RelayPairingCode"
+  }
+}
+$Greeting = $GreetingLines -join "`n"
 
 if ($Config.copyGreetingToClipboard -and !$NoClipboard) {
   if ($DryRun) { Say "Dry-run: would copy GPT greeting to clipboard." } else {

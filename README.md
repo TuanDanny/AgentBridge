@@ -89,7 +89,14 @@ node dist\cli.js relay pairing create
 node dist\cli.js relay serve --experimental
 ```
 
-Relay mode is not production yet; it is the planned v1.2 path toward zero-setup GPT Actions without user-managed tunnels.
+Relay mode can also be selected in local launcher config:
+
+```powershell
+node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay
+.\start-codexlink.bat
+```
+
+In relay mode the launcher starts the local AgentBridge side, prepares a short-lived pairing code, and tells you which relay GPT Actions schema/prototype command to use. Relay mode is still experimental/local-only; it is the planned v1.2 path toward zero-setup GPT Actions without user-managed tunnels, not a production hosted relay yet.
 
 Relay GPT Actions schema prototype:
 

@@ -118,6 +118,15 @@ node dist\cli.js relay spec
 
 This command does not start or implement a production relay. It exists to make the future zero-setup path explicit while keeping v1.1 safe.
 
+Experimental relay launcher mode:
+
+```powershell
+node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay
+start-codexlink.bat
+```
+
+When relay mode is configured, the launcher still starts the local AgentBridge server and bootstraps the shared session. It also creates a short-lived relay pairing code, prints it once for the user, and adds relay instructions to the copied GPT greeting. The raw pairing code is not written to the launcher log. Use `openapi.codexlink.relay.gpt-actions.json` only with a trusted relay origin. The included `relay serve --experimental` command is a local prototype, not a hosted production relay.
+
 ## Stable Endpoint Recommended
 
 Use a stable HTTPS URL or stable tunnel/domain for GPT Actions. Cloudflare quick tunnel URLs such as `*.trycloudflare.com` are temporary; GPT Actions may need schema updates when the URL changes.

@@ -685,7 +685,7 @@ export function setupRelay(rootInput = process.cwd(), options: SetupOptions = {}
       "Use a stable public HTTPS endpoint today: setup launcher --public-url <url>.",
       "Read docs/architecture/CODEXLINK_V1_2_ZERO_SETUP_ROADMAP.md before implementing relay.",
       "Do not expose shell, write-file, local auth token, or raw file content through relay.",
-      "Prototype self-host relay before any hosted production relay."
+      "Keep relay mode experimental until hosted production relay pairing, revocation, and audit are fully tested."
     ]
   };
 }
