@@ -64,6 +64,7 @@ import { type LauncherTunnelMode } from "./launcher.js";
 import { formatRelayProtocolSummary, getRelayProtocolSpec, validateRelayProtocolSpec } from "./relayProtocol.js";
 import { bindRelayPairingCode, createRelayPairing, readRelayPairingStatus, revokeRelayPairing } from "./relayPairing.js";
 import { createRelayEnvelope, dispatchRelayRequestLocally } from "./relayLocalDispatch.js";
+import { startRelayPrototypeServer } from "./relayServer.js";
 import {
   createCodexChangesSummary,
   createProjectInspectPacket,
@@ -1797,6 +1798,29 @@ relay
       }
     }
   );
+
+relay
+  .command("serve")
+  .description("Start the experimental local-only relay prototype server.")
+  .option("--host <host>", "loopback host to bind", "127.0.0.1")
+  .option("--port <port>", "port to bind", "8787")
+  .option("--experimental", "required acknowledgement that this is not production relay")
+  .action(async (options: { host: string; port: string; experimental?: boolean }) => {
+    try {
+      if (!options.experimental) {
+        throw new Error("relay serve requires --experimental. It is local-only and not production relay.");
+      }
+      const port = Number.parseInt(options.port, 10);
+      if (!Number.isInteger(port) || port < 0 || port > 65535) {
+        throw new Error("Port must be an integer from 0 to 65535.");
+      }
+      const running = await startRelayPrototypeServer(process.cwd(), { host: options.host, port });
+      console.log(`CodexLink relay prototype listening on http://${running.info.host}:${running.info.port}`);
+      console.log("Experimental/local-only. Pair with `relay pairing create`; do not expose this as production relay.");
+    } catch (error) {
+      handleError(error);
+    }
+  });
 
 program
   .command("pair")

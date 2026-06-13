@@ -104,6 +104,26 @@ node dist\cli.js relay dispatch getSessionTimeline --project AgentBridge --mode 
 
 This is local-only and validates the envelope before dispatch. It does not expose a network listener, does not use `.agentbridge/local_token`, and does not add write-file, shell, scan, or HTTP MCP capability.
 
+## Experimental Loopback Relay Prototype
+
+For local protocol testing only:
+
+```powershell
+node dist\cli.js relay serve --experimental --host 127.0.0.1 --port 8787
+```
+
+The prototype:
+
+- binds only to loopback hosts
+- serves public `GET /relay/health`
+- accepts `POST /relay/pair` with a short-lived pairing code
+- requires `X-CodexLink-Relay-Session` for allowlisted `/chatgpt/*` metadata dispatch
+- does not read or print `.agentbridge/local_token`
+- does not expose `/mcp`
+- does not expose shell, write-file, scan, raw file content, raw diff, or long terminal output
+
+This is not the stable hosted relay endpoint needed for final zero-setup GPT Actions. That still requires a hardened HTTPS/WSS relay service and end-to-end security review.
+
 ## Forbidden Capabilities
 
 - No arbitrary shell or command runner.
