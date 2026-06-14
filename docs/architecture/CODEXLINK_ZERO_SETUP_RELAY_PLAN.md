@@ -1,6 +1,6 @@
 # CodexLink v1.2 Zero-Setup Stable Relay Plan
 
-This is a design backlog for v1.2. It does not implement a production relay server.
+This is the design backlog that led to the v1.2 hosted relay MVP. The current implementation includes a deployable Node relay MVP with pairing-only metadata/inspector forwarding; it is not an account/team/cloud workspace mode and does not expose write, shell, or HTTP MCP capability.
 
 The goal is the real daily workflow:
 

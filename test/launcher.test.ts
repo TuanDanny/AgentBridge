@@ -114,7 +114,7 @@ describe("one-click launcher helpers", () => {
     expect(result.next_steps).toContain(
       "Import openapi.codexlink.relay.gpt-actions.json only when using a trusted relay origin."
     );
-    expect(result.next_steps).toContain("Use node dist/cli.js relay pairing create to create a short-lived pairing code.");
+    expect(result.next_steps).toContain("Pair GPT Actions with the short-lived code printed by the relay client.");
     expect(result.next_steps).toContain(
       "The launcher can auto-start the loopback relay prototype at http://127.0.0.1:8787."
     );
@@ -149,10 +149,14 @@ describe("one-click launcher helpers", () => {
     expect(startPowerShell).toContain("Relay prototype: PASS");
     expect(startPowerShell).toContain('"relay","serve","--experimental","--host",$Config.relayHost');
     expect(startPowerShell).toContain('"relay","pairing","create","--json"');
+    expect(startPowerShell).toContain('"relay","client","connect","--relay-url",$RelayUrl');
+    expect(startPowerShell).toContain("--use-local-pairing");
     expect(startPowerShell).toContain("Say-ConsoleOnly \"Relay pairing code:");
     expect(startPowerShell).toContain("Relay mode note: use the relay GPT Actions schema only with a trusted relay origin.");
     expect(stopPowerShell).toContain("relay_process_id");
+    expect(stopPowerShell).toContain("relay_client_process_id");
     expect(stopPowerShell).toContain("Relay prototype stopped");
+    expect(stopPowerShell).toContain("Relay client stopped");
     expect(relaySmoke).toContain("/relay/pair");
     expect(relaySmoke).toContain("/chatgpt/projects/$ProjectId/session/summary");
     expect(relaySmoke).toContain("OKKK");

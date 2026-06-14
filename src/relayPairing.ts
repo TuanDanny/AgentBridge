@@ -1,6 +1,8 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { bridgePath, resolveProjectRoot } from "./paths.js";
 import { ensureDir, readJsonIfExists, writeJson } from "./fsx.js";
+import { createRelayPairingCode, hashRelayPairingCode, safeEqualRelayHash } from "./relaySecurity.js";
+import { getOrCreateRelayDevice } from "./relayDevice.js";
 
 export type RelayPairingStatus = "pending" | "paired" | "revoked" | "expired" | "missing";
 
@@ -46,6 +48,14 @@ export interface RelayPairingOptions {
   now?: Date;
 }
 
+export interface RelayPairingRegistration {
+  ok: boolean;
+  status: RelayPairingStatus;
+  code_hash?: string;
+  expires_at?: string;
+  code_value_stored: false;
+}
+
 const DEFAULT_TTL_SECONDS = 300;
 const MAX_TTL_SECONDS = 900;
 const GPT_SESSION_HINT_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -58,12 +68,13 @@ export function createRelayPairing(rootInput = process.cwd(), options: RelayPair
   const root = resolveProjectRoot(rootInput);
   const now = options.now ?? new Date();
   const ttlSeconds = normalizeTtl(options.ttlSeconds);
-  const code = createPairingCode();
+  const device = getOrCreateRelayDevice(root);
+  const code = createRelayPairingCode();
   const pairing: RelayPairingFile = {
     version: 1,
     pairing_id: `relay_pair_${randomUUID()}`,
-    device_id: `device_${randomUUID()}`,
-    code_hash: hashPairingCode(code),
+    device_id: device.device_id,
+    code_hash: hashRelayPairingCode(code),
     status: "pending",
     created_at: now.toISOString(),
     expires_at: new Date(now.getTime() + ttlSeconds * 1000).toISOString()
@@ -77,7 +88,7 @@ export function createRelayPairing(rootInput = process.cwd(), options: RelayPair
     next_steps: [
       "Paste this short-lived pairing code into the trusted GPTs relay pairing flow.",
       "The raw pairing code is printed once and is not stored in .agentbridge.",
-      "Relay forwarding remains disabled until a future relay server/client is implemented."
+      "Relay forwarding starts after a trusted hosted relay and local relay client are connected."
     ]
   };
 }
@@ -88,6 +99,24 @@ export function readRelayPairingStatus(rootInput = process.cwd(), now = new Date
     return { ok: true, status: "missing", code_value_stored: false };
   }
   return toPublicStatus(pairing, now);
+}
+
+export function readRelayPairingRegistration(rootInput = process.cwd(), now = new Date()): RelayPairingRegistration {
+  const pairing = readRelayPairingFile(rootInput);
+  if (!pairing) {
+    return { ok: false, status: "missing", code_value_stored: false };
+  }
+  const status = toPublicStatus(pairing, now).status;
+  if (status !== "pending") {
+    return { ok: false, status, expires_at: pairing.expires_at, code_value_stored: false };
+  }
+  return {
+    ok: true,
+    status,
+    code_hash: pairing.code_hash,
+    expires_at: pairing.expires_at,
+    code_value_stored: false
+  };
 }
 
 export function bindRelayPairingCode(
@@ -108,7 +137,7 @@ export function bindRelayPairingCode(
   if (!GPT_SESSION_HINT_PATTERN.test(gptSessionHint)) {
     throw new Error("GPT session hint must be a safe short identifier.");
   }
-  const matched = safeEqualHash(pairing.code_hash, hashPairingCode(code));
+  const matched = safeEqualRelayHash(pairing.code_hash, hashRelayPairingCode(code));
   if (!matched) {
     return { ...publicStatus, ok: false, matched: false };
   }
@@ -166,25 +195,4 @@ function normalizeTtl(ttlSeconds: number | undefined): number {
     throw new Error(`Relay pairing TTL must be an integer from 30 to ${MAX_TTL_SECONDS} seconds.`);
   }
   return ttlSeconds;
-}
-
-function createPairingCode(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(8);
-  const chars = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
-  return `${chars.slice(0, 4)}-${chars.slice(4, 8)}`;
-}
-
-function hashPairingCode(code: string): string {
-  return createHash("sha256").update(normalizeCode(code)).digest("hex");
-}
-
-function normalizeCode(code: string): string {
-  return code.trim().toUpperCase().replace(/[\s-]+/g, "");
-}
-
-function safeEqualHash(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "hex");
-  const rightBuffer = Buffer.from(right, "hex");
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }

@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { getRelayProtocolSpec, validateRelayProtocolSpec, validateRelayRequestEnvelope } from "../src/relayProtocol.js";
 
 describe("relay protocol spec", () => {
-  it("is spec-only and validates security guardrails", () => {
+  it("is hosted MVP and validates security guardrails", () => {
     const spec = getRelayProtocolSpec();
     const validation = validateRelayProtocolSpec(spec);
-    expect(spec.status).toBe("spec_only");
+    expect(spec.status).toBe("hosted_mvp");
     expect(validation).toEqual({ ok: true, errors: [] });
     expect(spec.pairing).toMatchObject({
       required: true,
@@ -28,6 +28,21 @@ describe("relay protocol spec", () => {
   it("keeps all allowed routes scoped to relay or chatgpt metadata paths", () => {
     const spec = getRelayProtocolSpec();
     expect(spec.allowed_routes.length).toBeGreaterThan(0);
+    expect(spec.allowed_routes.map((route) => route.operation_id)).toEqual([
+      "listProjects",
+      "getSessionSummary",
+      "getSessionContext",
+      "getSessionTimeline",
+      "inspectProject",
+      "getCodexChanges",
+      "getReviewPacket",
+      "getProjectTree",
+      "searchProjectFiles",
+      "readProjectFile",
+      "searchProjectText",
+      "pairDevice",
+      "relayHealth"
+    ]);
     for (const route of spec.allowed_routes) {
       expect(["GET", "POST"]).toContain(route.method);
       expect(route.path.startsWith("/chatgpt/") || route.path.startsWith("/relay/")).toBe(true);

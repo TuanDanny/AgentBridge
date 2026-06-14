@@ -1,8 +1,8 @@
 # CodexLink Relay Protocol Spec
 
-Status: experimental loopback prototype.
+Status: hosted MVP plus legacy loopback prototype.
 
-This spec supports the v1.2 zero-setup roadmap. It includes a local-only relay prototype for safety testing; it is not a hosted production relay server.
+This spec supports the v1.2 zero-setup roadmap. It now includes a deployable Node hosted relay MVP that forwards paired metadata/inspector routes over outbound WebSocket. It is still intentionally read-only and pairing-only.
 
 ## Transport
 
@@ -37,6 +37,13 @@ Relay MVP may only expose bounded metadata routes:
 - session summary
 - compact session context
 - session timeline
+- project inspector snapshot
+- Codex changes summary
+- review packet summary
+- bounded project tree
+- bounded filename search
+- safe bounded text file read
+- bounded redacted grep snippets
 - relay pairing metadata
 - relay health metadata
 
@@ -64,11 +71,11 @@ node dist\cli.js relay pairing bind --code <CODE> --gpt-session <safe-session-hi
 node dist\cli.js relay pairing revoke
 ```
 
-These commands do not start a relay server. The raw pairing code is printed once by `create`; `.agentbridge/relay-pairing.json` stores a hash, expiry, device ID, and status metadata only.
+The raw pairing code is printed once by `create`; `.agentbridge/relay-pairing.json` stores a hash, expiry, device ID, and status metadata only.
 
 ## Request Envelope Validation
 
-Before any future relay server forwards a request to a local launcher, it must validate a bounded request envelope:
+Before the hosted relay forwards a request to a local launcher, it validates a bounded request envelope:
 
 ```json
 {
@@ -89,7 +96,7 @@ The validator in `src/relayProtocol.ts` rejects:
 - request bodies larger than the MVP byte cap
 - forbidden capability terms such as file write, command runner, local token, or OpenAI API key
 
-This is still not a production relay. It is a guardrail for the next implementation phase.
+The local relay client validates the same envelope again before dispatching to local AgentBridge.
 
 ## Local Dispatch Dry-Run
 
@@ -100,9 +107,33 @@ node dist\cli.js relay dispatch listProjects --json
 node dist\cli.js relay dispatch getSessionSummary --project AgentBridge --json
 node dist\cli.js relay dispatch getSessionContext --project AgentBridge --json
 node dist\cli.js relay dispatch getSessionTimeline --project AgentBridge --mode recent --json
+node dist\cli.js relay dispatch inspectProject --project AgentBridge --json
+node dist\cli.js relay dispatch getProjectTree --project AgentBridge --json
 ```
 
 This is local-only and validates the envelope before dispatch. It does not expose a network listener, does not use `.agentbridge/local_token`, and does not add write-file, shell, scan, or HTTP MCP capability.
+
+## Hosted Relay MVP
+
+Run behind an external HTTPS/WSS proxy:
+
+```powershell
+node dist\cli.js relay hosted serve --host 0.0.0.0 --port 8788 --public-url https://relay.codexlink.example.com
+```
+
+Start the local outbound client:
+
+```powershell
+node dist\cli.js relay client connect --relay-url https://relay.codexlink.example.com --project AgentBridge
+```
+
+The client prints a short-lived pairing code once. GPT Actions calls `pairDevice`, receives a relay session, and sends `X-CodexLink-Relay-Session` on subsequent requests.
+
+Hosted e2e smoke:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-hosted-relay-e2e.ps1
+```
 
 ## Experimental Loopback Relay Prototype
 
@@ -122,8 +153,6 @@ The prototype:
 - does not expose `/mcp`
 - does not expose shell, write-file, scan, raw file content, raw diff, or long terminal output
 
-This is not the stable hosted relay endpoint needed for final zero-setup GPT Actions. That still requires a hardened HTTPS/WSS relay service and end-to-end security review.
-
 Loopback acceptance smoke:
 
 ```powershell
@@ -134,7 +163,7 @@ The smoke test bootstraps a local session, creates a short-lived pairing code, s
 
 ## GPT Actions Relay Schema
 
-Prototype schema:
+Schema:
 
 ```text
 openapi.codexlink.relay.gpt-actions.json
@@ -146,7 +175,7 @@ This schema uses the placeholder server:
 https://relay.codexlink.example.com
 ```
 
-It only contains relay health, pairing, project picker, session summary, compact context, and timeline metadata routes. Use the direct `openapi.agentbridge.gpt-actions.json` schema for stable tunnel/domain mode today.
+It contains relay health, pairing, project picker, shared-session routes, inspector routes, and safe bounded project browsing routes. Use the direct `openapi.agentbridge.gpt-actions.json` schema for stable tunnel/domain mode.
 
 ## Forbidden Capabilities
 

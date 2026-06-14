@@ -164,6 +164,126 @@ const relayTimelineParams = [
   }
 ];
 
+const relayInspectorParams = [
+  {
+    name: "max_chars",
+    in: "query",
+    required: false,
+    description: "Maximum characters per large inspector field.",
+    schema: { type: "integer", minimum: 1, maximum: 6000 }
+  },
+  {
+    name: "include_diff",
+    in: "query",
+    required: false,
+    description: "Include bounded diff summary metadata when true.",
+    schema: { type: "boolean" }
+  }
+];
+
+const relayTreeParams = [
+  {
+    name: "max_depth",
+    in: "query",
+    required: false,
+    description: "Maximum tree depth.",
+    schema: { type: "integer", minimum: 0, maximum: 20 }
+  },
+  {
+    name: "max_entries",
+    in: "query",
+    required: false,
+    description: "Maximum returned tree entries.",
+    schema: { type: "integer", minimum: 1, maximum: 10000 }
+  },
+  {
+    name: "include_sizes",
+    in: "query",
+    required: false,
+    description: "Include file sizes when available.",
+    schema: { type: "boolean" }
+  }
+];
+
+const relayFileSearchParams = [
+  {
+    name: "q",
+    in: "query",
+    required: true,
+    description: "Safe filename query.",
+    schema: stringSchema()
+  },
+  {
+    name: "max_results",
+    in: "query",
+    required: false,
+    description: "Maximum file matches.",
+    schema: { type: "integer", minimum: 1, maximum: 500 }
+  },
+  {
+    name: "max_depth",
+    in: "query",
+    required: false,
+    description: "Maximum search depth.",
+    schema: { type: "integer", minimum: 0, maximum: 20 }
+  }
+];
+
+const relayFileReadParams = [
+  {
+    name: "path",
+    in: "query",
+    required: true,
+    description: "Project-relative safe text file path.",
+    schema: stringSchema()
+  },
+  {
+    name: "max_chars",
+    in: "query",
+    required: false,
+    description: "Maximum returned characters, capped by local policy.",
+    schema: { type: "integer", minimum: 1, maximum: 1048576 }
+  },
+  {
+    name: "start_line",
+    in: "query",
+    required: false,
+    description: "Optional starting line.",
+    schema: { type: "integer", minimum: 1 }
+  },
+  {
+    name: "num_lines",
+    in: "query",
+    required: false,
+    description: "Optional number of lines.",
+    schema: { type: "integer", minimum: 1 }
+  }
+];
+
+const relayGrepParams = [
+  {
+    name: "q",
+    in: "query",
+    required: true,
+    description: "Safe text query.",
+    schema: stringSchema()
+  },
+  {
+    name: "max_matches",
+    in: "query",
+    required: false,
+    description: "Maximum grep matches.",
+    schema: { type: "integer", minimum: 1, maximum: 500 }
+  },
+  {
+    name: "max_depth",
+    in: "query",
+    required: false,
+    description: "Maximum search depth.",
+    schema: { type: "integer", minimum: 0, maximum: 20 }
+  }
+];
+
 function relayJsonResponse(description) {
   return {
     description,
@@ -269,6 +389,98 @@ const relaySpec = {
         parameters: [relaySessionHeader, relayProjectId, ...relayTimelineParams],
         responses: {
           "200": relayJsonResponse("Timeline metadata"),
+          "401": relayJsonResponse("Relay session required"),
+          "404": relayJsonResponse("Project not found")
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/inspect": {
+      get: {
+        operationId: "inspectProject",
+        summary: "Inspect project",
+        description: "Get a redacted project inspector snapshot through the paired relay.",
+        parameters: [relaySessionHeader, relayProjectId, ...relayInspectorParams],
+        responses: {
+          "200": relayJsonResponse("Inspector snapshot"),
+          "401": relayJsonResponse("Relay session required"),
+          "404": relayJsonResponse("Project not found")
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/codex-changes": {
+      get: {
+        operationId: "getCodexChanges",
+        summary: "Get Codex changes",
+        description: "Get redacted Codex change metadata for one safe project id.",
+        parameters: [relaySessionHeader, relayProjectId, ...relayInspectorParams],
+        responses: {
+          "200": relayJsonResponse("Codex change metadata"),
+          "401": relayJsonResponse("Relay session required"),
+          "404": relayJsonResponse("Project not found")
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/review-packet": {
+      get: {
+        operationId: "getReviewPacket",
+        summary: "Get review packet",
+        description: "Get redacted review packet metadata and recommended review questions.",
+        parameters: [relaySessionHeader, relayProjectId, ...relayInspectorParams],
+        responses: {
+          "200": relayJsonResponse("Review packet metadata"),
+          "401": relayJsonResponse("Relay session required"),
+          "404": relayJsonResponse("Project not found")
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/tree": {
+      get: {
+        operationId: "getProjectTree",
+        summary: "Get project tree",
+        description: "Get bounded project inventory, classification, and coverage metadata.",
+        parameters: [relaySessionHeader, relayProjectId, ...relayTreeParams],
+        responses: {
+          "200": relayJsonResponse("Project tree metadata"),
+          "401": relayJsonResponse("Relay session required"),
+          "404": relayJsonResponse("Project not found")
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/files/search": {
+      get: {
+        operationId: "searchProjectFiles",
+        summary: "Search project files",
+        description: "Search safe project-relative file names with bounded results.",
+        parameters: [relaySessionHeader, relayProjectId, ...relayFileSearchParams],
+        responses: {
+          "200": relayJsonResponse("File search results"),
+          "401": relayJsonResponse("Relay session required"),
+          "404": relayJsonResponse("Project not found")
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/file": {
+      get: {
+        operationId: "readProjectFile",
+        summary: "Read safe text file",
+        description: "Read a bounded safe text file using local redaction and blocking policy.",
+        parameters: [relaySessionHeader, relayProjectId, ...relayFileReadParams],
+        responses: {
+          "200": relayJsonResponse("Safe text file content"),
+          "400": relayJsonResponse("Unsafe or blocked file path"),
+          "401": relayJsonResponse("Relay session required"),
+          "404": relayJsonResponse("Project not found")
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/grep": {
+      get: {
+        operationId: "searchProjectText",
+        summary: "Search project text",
+        description: "Search safe text files with bounded redacted snippets.",
+        parameters: [relaySessionHeader, relayProjectId, ...relayGrepParams],
+        responses: {
+          "200": relayJsonResponse("Text search metadata"),
           "401": relayJsonResponse("Relay session required"),
           "404": relayJsonResponse("Project not found")
         }

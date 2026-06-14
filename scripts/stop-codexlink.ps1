@@ -26,6 +26,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $relayStopped = $false
+$relayClientStopped = $false
 if (Test-Path $StateFile) {
   try {
     $state = Get-Content $StateFile -Raw | ConvertFrom-Json
@@ -43,8 +44,23 @@ if (Test-Path $StateFile) {
         Write-Host "Relay prototype process was not running." -ForegroundColor Yellow
       }
     }
+    if ($state.relay_client_process_id) {
+      try {
+        $relayClientProcess = Get-Process -Id ([int]$state.relay_client_process_id) -ErrorAction Stop
+        if ($relayClientProcess.ProcessName -eq "node") {
+          Stop-Process -Id $relayClientProcess.Id -Force
+          $relayClientStopped = $true
+          Write-Host "Relay client stopped (pid $($relayClientProcess.Id))."
+        } else {
+          Write-Host "Relay client process id no longer belongs to node; skipped." -ForegroundColor Yellow
+        }
+      } catch {
+        Write-Host "Relay client process was not running." -ForegroundColor Yellow
+      }
+    }
     $state | Add-Member -NotePropertyName stopped_at -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
     $state | Add-Member -NotePropertyName relay_stopped -NotePropertyValue $relayStopped -Force
+    $state | Add-Member -NotePropertyName relay_client_stopped -NotePropertyValue $relayClientStopped -Force
     $state | ConvertTo-Json -Depth 5 | Set-Content -Path $StateFile -Encoding UTF8
   } catch {
     Write-Host "Could not update launcher state file." -ForegroundColor Yellow

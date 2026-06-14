@@ -371,6 +371,651 @@
           }
         }
       }
+    },
+    "/chatgpt/projects/{projectId}/inspect": {
+      "get": {
+        "operationId": "inspectProject",
+        "summary": "Inspect project",
+        "description": "Get a redacted project inspector snapshot through the paired relay.",
+        "parameters": [
+          {
+            "name": "X-CodexLink-Relay-Session",
+            "in": "header",
+            "required": true,
+            "description": "Relay session binding from the CodexLink pairing flow. Do not use the local auth token here.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe project id from listProjects.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,80}$"
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "description": "Maximum characters per large inspector field.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6000
+            }
+          },
+          {
+            "name": "include_diff",
+            "in": "query",
+            "required": false,
+            "description": "Include bounded diff summary metadata when true.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspector snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Relay session required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/codex-changes": {
+      "get": {
+        "operationId": "getCodexChanges",
+        "summary": "Get Codex changes",
+        "description": "Get redacted Codex change metadata for one safe project id.",
+        "parameters": [
+          {
+            "name": "X-CodexLink-Relay-Session",
+            "in": "header",
+            "required": true,
+            "description": "Relay session binding from the CodexLink pairing flow. Do not use the local auth token here.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe project id from listProjects.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,80}$"
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "description": "Maximum characters per large inspector field.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6000
+            }
+          },
+          {
+            "name": "include_diff",
+            "in": "query",
+            "required": false,
+            "description": "Include bounded diff summary metadata when true.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Codex change metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Relay session required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/review-packet": {
+      "get": {
+        "operationId": "getReviewPacket",
+        "summary": "Get review packet",
+        "description": "Get redacted review packet metadata and recommended review questions.",
+        "parameters": [
+          {
+            "name": "X-CodexLink-Relay-Session",
+            "in": "header",
+            "required": true,
+            "description": "Relay session binding from the CodexLink pairing flow. Do not use the local auth token here.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe project id from listProjects.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,80}$"
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "description": "Maximum characters per large inspector field.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6000
+            }
+          },
+          {
+            "name": "include_diff",
+            "in": "query",
+            "required": false,
+            "description": "Include bounded diff summary metadata when true.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review packet metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Relay session required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/tree": {
+      "get": {
+        "operationId": "getProjectTree",
+        "summary": "Get project tree",
+        "description": "Get bounded project inventory, classification, and coverage metadata.",
+        "parameters": [
+          {
+            "name": "X-CodexLink-Relay-Session",
+            "in": "header",
+            "required": true,
+            "description": "Relay session binding from the CodexLink pairing flow. Do not use the local auth token here.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe project id from listProjects.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,80}$"
+            }
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "description": "Maximum tree depth.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          },
+          {
+            "name": "max_entries",
+            "in": "query",
+            "required": false,
+            "description": "Maximum returned tree entries.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            }
+          },
+          {
+            "name": "include_sizes",
+            "in": "query",
+            "required": false,
+            "description": "Include file sizes when available.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project tree metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Relay session required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/files/search": {
+      "get": {
+        "operationId": "searchProjectFiles",
+        "summary": "Search project files",
+        "description": "Search safe project-relative file names with bounded results.",
+        "parameters": [
+          {
+            "name": "X-CodexLink-Relay-Session",
+            "in": "header",
+            "required": true,
+            "description": "Relay session binding from the CodexLink pairing flow. Do not use the local auth token here.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe project id from listProjects.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,80}$"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Safe filename query.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "description": "Maximum file matches.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "description": "Maximum search depth.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Relay session required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/file": {
+      "get": {
+        "operationId": "readProjectFile",
+        "summary": "Read safe text file",
+        "description": "Read a bounded safe text file using local redaction and blocking policy.",
+        "parameters": [
+          {
+            "name": "X-CodexLink-Relay-Session",
+            "in": "header",
+            "required": true,
+            "description": "Relay session binding from the CodexLink pairing flow. Do not use the local auth token here.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe project id from listProjects.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,80}$"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "Project-relative safe text file path.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "description": "Maximum returned characters, capped by local policy.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576
+            }
+          },
+          {
+            "name": "start_line",
+            "in": "query",
+            "required": false,
+            "description": "Optional starting line.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "num_lines",
+            "in": "query",
+            "required": false,
+            "description": "Optional number of lines.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe text file content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe or blocked file path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Relay session required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/grep": {
+      "get": {
+        "operationId": "searchProjectText",
+        "summary": "Search project text",
+        "description": "Search safe text files with bounded redacted snippets.",
+        "parameters": [
+          {
+            "name": "X-CodexLink-Relay-Session",
+            "in": "header",
+            "required": true,
+            "description": "Relay session binding from the CodexLink pairing flow. Do not use the local auth token here.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Safe project id from listProjects.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,80}$"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Safe text query.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_matches",
+            "in": "query",
+            "required": false,
+            "description": "Maximum grep matches.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "description": "Maximum search depth.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Text search metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Relay session required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

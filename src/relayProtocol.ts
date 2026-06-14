@@ -8,7 +8,7 @@ export interface RelayAllowedRoute {
 
 export interface RelayProtocolSpec {
   version: 1;
-  status: "spec_only";
+  status: "hosted_mvp";
   transport: {
     gpt_to_relay: "HTTPS";
     launcher_to_relay: "WSS";
@@ -74,7 +74,7 @@ const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,80}$/;
 export function getRelayProtocolSpec(): RelayProtocolSpec {
   return {
     version: 1,
-    status: "spec_only",
+    status: "hosted_mvp",
     transport: {
       gpt_to_relay: "HTTPS",
       launcher_to_relay: "WSS",
@@ -120,6 +120,55 @@ export function getRelayProtocolSpec(): RelayProtocolSpec {
         method: "GET",
         path: "/chatgpt/projects/{projectId}/session/timeline",
         purpose: "Bounded task, handoff, or file activity timeline metadata.",
+        response_content_policy: "bounded_redacted_json"
+      },
+      {
+        operation_id: "inspectProject",
+        method: "GET",
+        path: "/chatgpt/projects/{projectId}/inspect",
+        purpose: "Redacted project inspector snapshot for one safe project id.",
+        response_content_policy: "bounded_redacted_json"
+      },
+      {
+        operation_id: "getCodexChanges",
+        method: "GET",
+        path: "/chatgpt/projects/{projectId}/codex-changes",
+        purpose: "Redacted Codex change summary and bounded diff metadata.",
+        response_content_policy: "bounded_redacted_json"
+      },
+      {
+        operation_id: "getReviewPacket",
+        method: "GET",
+        path: "/chatgpt/projects/{projectId}/review-packet",
+        purpose: "Redacted technical review packet summary.",
+        response_content_policy: "bounded_redacted_json"
+      },
+      {
+        operation_id: "getProjectTree",
+        method: "GET",
+        path: "/chatgpt/projects/{projectId}/tree",
+        purpose: "Bounded project inventory, classification, and coverage metadata.",
+        response_content_policy: "bounded_redacted_json"
+      },
+      {
+        operation_id: "searchProjectFiles",
+        method: "GET",
+        path: "/chatgpt/projects/{projectId}/files/search",
+        purpose: "Bounded project file-name search metadata.",
+        response_content_policy: "bounded_redacted_json"
+      },
+      {
+        operation_id: "readProjectFile",
+        method: "GET",
+        path: "/chatgpt/projects/{projectId}/file",
+        purpose: "Safe bounded text file read using existing redaction and blocking policy.",
+        response_content_policy: "bounded_redacted_json"
+      },
+      {
+        operation_id: "searchProjectText",
+        method: "GET",
+        path: "/chatgpt/projects/{projectId}/grep",
+        purpose: "Bounded text search snippets with redaction.",
         response_content_policy: "bounded_redacted_json"
       },
       {
@@ -218,8 +267,8 @@ export function validateRelayRequestEnvelope(
 
 export function validateRelayProtocolSpec(spec: RelayProtocolSpec = getRelayProtocolSpec()): RelayProtocolValidation {
   const errors: string[] = [];
-  if (spec.status !== "spec_only") {
-    errors.push("Relay protocol must remain spec_only until implementation is explicitly approved.");
+  if (spec.status !== "hosted_mvp") {
+    errors.push("Relay protocol must be hosted_mvp for the approved zero-setup relay implementation.");
   }
   if (!spec.pairing.required || !spec.pairing.single_use_code || !spec.pairing.session_bound || !spec.pairing.revocation_required) {
     errors.push("Relay protocol must require pairing, single-use code, session binding, and revocation.");
@@ -261,7 +310,7 @@ export function formatRelayProtocolSummary(spec: RelayProtocolSpec = getRelayPro
     `Validation: ${validation.ok ? "PASS" : "FAIL"}`,
     ...(validation.errors.length ? validation.errors.map((error) => `- ${error}`) : []),
     "",
-    "This is a protocol spec only. It does not start a relay server or expose local tools."
+    "Hosted MVP exposes only paired metadata/inspector routes through launcher WSS. It does not expose MCP, shell, or write routes."
   ].join("\n");
 }
 

@@ -274,7 +274,14 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
       "/chatgpt/projects",
       "/chatgpt/projects/{projectId}/session/summary",
       "/chatgpt/projects/{projectId}/session/context",
-      "/chatgpt/projects/{projectId}/session/timeline"
+      "/chatgpt/projects/{projectId}/session/timeline",
+      "/chatgpt/projects/{projectId}/inspect",
+      "/chatgpt/projects/{projectId}/codex-changes",
+      "/chatgpt/projects/{projectId}/review-packet",
+      "/chatgpt/projects/{projectId}/tree",
+      "/chatgpt/projects/{projectId}/files/search",
+      "/chatgpt/projects/{projectId}/file",
+      "/chatgpt/projects/{projectId}/grep"
     ]);
     expect(spec.paths["/relay/health"].get.operationId).toBe("relayHealth");
     expect(spec.paths["/relay/pair"].post.operationId).toBe("pairDevice");
@@ -282,6 +289,13 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
     expect(spec.paths["/chatgpt/projects/{projectId}/session/summary"].get.operationId).toBe("getSessionSummary");
     expect(spec.paths["/chatgpt/projects/{projectId}/session/context"].get.operationId).toBe("getSessionContext");
     expect(spec.paths["/chatgpt/projects/{projectId}/session/timeline"].get.operationId).toBe("getSessionTimeline");
+    expect(spec.paths["/chatgpt/projects/{projectId}/inspect"].get.operationId).toBe("inspectProject");
+    expect(spec.paths["/chatgpt/projects/{projectId}/codex-changes"].get.operationId).toBe("getCodexChanges");
+    expect(spec.paths["/chatgpt/projects/{projectId}/review-packet"].get.operationId).toBe("getReviewPacket");
+    expect(spec.paths["/chatgpt/projects/{projectId}/tree"].get.operationId).toBe("getProjectTree");
+    expect(spec.paths["/chatgpt/projects/{projectId}/files/search"].get.operationId).toBe("searchProjectFiles");
+    expect(spec.paths["/chatgpt/projects/{projectId}/file"].get.operationId).toBe("readProjectFile");
+    expect(spec.paths["/chatgpt/projects/{projectId}/grep"].get.operationId).toBe("searchProjectText");
     expect(spec.components.schemas).toBeDefined();
     expect(spec.components.securitySchemes.relaySession).toMatchObject({
       type: "apiKey",

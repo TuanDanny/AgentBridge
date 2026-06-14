@@ -78,45 +78,47 @@ node dist\cli.js setup launcher --project AgentBridge --public-url https://codex
 node dist\cli.js setup gpt-actions --public-url https://codexlink.example.com
 ```
 
-Quick tunnel URLs are temporary and may require schema updates.
-
-Relay planning placeholder:
+Quick tunnel URLs are temporary and may require schema updates. For zero-setup daily GPT Actions, use a trusted hosted relay:
 
 ```powershell
-node dist\cli.js setup relay --dry-run
-node dist\cli.js relay spec
-node dist\cli.js relay pairing create
-node dist\cli.js relay serve --experimental
+node dist\cli.js relay hosted serve --host 0.0.0.0 --port 8788 --public-url https://relay.codexlink.example.com
 ```
 
-Relay mode can also be selected in local launcher config:
+Then configure the user machine once:
 
 ```powershell
-node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay
+node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay --relay-url https://relay.codexlink.example.com --gpt-url https://chatgpt.com/g/YOUR-GPT
 .\start-codexlink.bat
 ```
 
-In relay mode the launcher starts the local AgentBridge side, prepares a short-lived pairing code, and tells you which relay GPT Actions schema/prototype command to use. Relay mode is still experimental/local-only; it is the planned v1.2 path toward zero-setup GPT Actions without user-managed tunnels, not a production hosted relay yet.
+In hosted relay mode the launcher starts local AgentBridge, creates a short-lived pairing code, starts an outbound WSS relay client, copies a GPT greeting, and can open the configured GPT URL. GPT Actions uses one stable relay HTTPS origin and the `X-CodexLink-Relay-Session` header returned by `pairDevice`.
 
-By default relay mode also starts the loopback-only relay prototype at `http://127.0.0.1:8787` and records its process id in local launcher state so `stop-codexlink.bat` can stop it. This prototype is only for local relay UX testing; it is not a hosted stable relay.
+The legacy loopback relay prototype is still available for local-only testing:
 
-Relay loopback smoke:
+```powershell
+node dist\cli.js relay serve --experimental
+```
+
+Relay smoke tests:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-relay-loopback.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-hosted-relay-e2e.ps1
 ```
 
-Relay GPT Actions schema prototype:
+Relay GPT Actions schema:
 
 ```text
 openapi.codexlink.relay.gpt-actions.json
 ```
 
-Use the regular `openapi.agentbridge.gpt-actions.json` for direct stable tunnel/domain setup today. The relay schema is for a future trusted relay origin and paired metadata routes only.
+Use the regular `openapi.agentbridge.gpt-actions.json` for direct stable tunnel/domain setup. Use `openapi.codexlink.relay.gpt-actions.json` for a trusted relay origin and paired metadata/inspector routes only.
 
 Guide: `docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md`
 
-Backlog for zero-setup stable relay mode: `docs/architecture/CODEXLINK_ZERO_SETUP_RELAY_PLAN.md`
+Hosted relay guide: `docs/guides/CODEXLINK_HOSTED_RELAY.md`
+
+Zero-setup stable relay design: `docs/architecture/CODEXLINK_ZERO_SETUP_RELAY_PLAN.md`
 
 v1.2 roadmap: `docs/architecture/CODEXLINK_V1_2_ZERO_SETUP_ROADMAP.md`
 

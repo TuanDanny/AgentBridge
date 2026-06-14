@@ -64,6 +64,8 @@ import { type LauncherTunnelMode } from "./launcher.js";
 import { formatRelayProtocolSummary, getRelayProtocolSpec, validateRelayProtocolSpec } from "./relayProtocol.js";
 import { bindRelayPairingCode, createRelayPairing, readRelayPairingStatus, revokeRelayPairing } from "./relayPairing.js";
 import { createRelayEnvelope, dispatchRelayRequestLocally } from "./relayLocalDispatch.js";
+import { startRelayClient } from "./relayClient.js";
+import { startHostedRelayServer } from "./relayHostedServer.js";
 import { startRelayPrototypeServer } from "./relayServer.js";
 import {
   createCodexChangesSummary,
@@ -1573,8 +1575,11 @@ setup
   .option("--tunnel-mode <mode>", "none, quick, stable, external, or relay")
   .option("--relay-host <host>", "loopback relay prototype host", "127.0.0.1")
   .option("--relay-port <port>", "loopback relay prototype port", "8787")
+  .option("--relay-url <url>", "trusted hosted relay HTTPS/WSS URL")
   .option("--auto-relay", "auto-start loopback relay prototype in relay mode")
   .option("--no-auto-relay", "do not auto-start loopback relay prototype")
+  .option("--auto-relay-client", "auto-start hosted relay client when relayUrl is configured")
+  .option("--no-auto-relay-client", "do not auto-start hosted relay client")
   .option("--open-browser", "open the configured GPT URL")
   .option("--no-open-browser", "do not open the configured GPT URL")
   .option("--copy-greeting", "copy the GPT greeting prompt")
@@ -1595,7 +1600,9 @@ setup
       tunnelMode?: string;
       relayHost?: string;
       relayPort: string;
+      relayUrl?: string;
       autoRelay?: boolean;
+      autoRelayClient?: boolean;
       openBrowser?: boolean;
       copyGreeting?: boolean;
       autoBootstrap?: boolean;
@@ -1621,7 +1628,9 @@ setup
           tunnelMode: options.tunnelMode as LauncherTunnelMode | undefined,
           relayHost: options.relayHost,
           relayPort,
+          relayUrl: options.relayUrl,
           autoRelay: options.autoRelay,
+          autoRelayClient: options.autoRelayClient,
           openBrowser: options.openBrowser,
           copyGreetingToClipboard: options.copyGreeting,
           autoBootstrap: options.autoBootstrap,
@@ -1831,6 +1840,70 @@ relay
       const running = await startRelayPrototypeServer(process.cwd(), { host: options.host, port });
       console.log(`CodexLink relay prototype listening on http://${running.info.host}:${running.info.port}`);
       console.log("Experimental/local-only. Pair with `relay pairing create`; do not expose this as production relay.");
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+const relayHosted = relay.command("hosted").description("Run a hosted CodexLink relay MVP server.");
+
+relayHosted
+  .command("serve")
+  .description("Start the hosted relay MVP HTTP/WSS server behind an external HTTPS proxy.")
+  .option("--host <host>", "host to bind", "0.0.0.0")
+  .option("--port <port>", "port to bind", process.env.PORT ?? "8788")
+  .requiredOption("--public-url <url>", "trusted public HTTPS URL shown in GPT Actions schema")
+  .action(async (options: { host: string; port: string; publicUrl: string }) => {
+    try {
+      const port = Number.parseInt(options.port, 10);
+      if (!Number.isInteger(port) || port < 0 || port > 65535) {
+        throw new Error("Port must be an integer from 0 to 65535.");
+      }
+      const running = await startHostedRelayServer({ host: options.host, port, publicUrl: options.publicUrl });
+      console.log(`CodexLink hosted relay listening on http://${running.info.host}:${running.info.port}`);
+      console.log(`Public URL: ${running.info.public_url}`);
+      console.log("External HTTPS/WSS termination is expected at the deployment platform or proxy.");
+      console.log("Routes are paired metadata/inspector only. No /mcp, shell, or write routes are exposed.");
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+const relayClient = relay.command("client").description("Connect this local AgentBridge project to a hosted relay.");
+
+relayClient
+  .command("connect")
+  .description("Open an outbound WebSocket to a hosted relay and print a short-lived pairing code once.")
+  .requiredOption("--relay-url <url>", "trusted relay HTTPS/WSS URL")
+  .requiredOption("--project <projectId>", "safe local project id to expose through relay metadata routes")
+  .option("--ttl <seconds>", "pairing code TTL in seconds, 30-900", "300")
+  .option("--use-local-pairing", "read a pending local relay pairing hash instead of generating a raw code")
+  .action(async (options: { relayUrl: string; project: string; ttl: string; useLocalPairing?: boolean }) => {
+    try {
+      const ttlSeconds = Number.parseInt(options.ttl, 10);
+      const running = await startRelayClient({
+        relayUrl: options.relayUrl,
+        projectId: options.project,
+        ttlSeconds,
+        useLocalPairing: Boolean(options.useLocalPairing)
+      });
+      console.log("CodexLink relay client connected.");
+      console.log(`Relay URL: ${running.relay_url}`);
+      console.log(`Device ID: ${running.device.device_id}`);
+      if (running.pairing_code) {
+        console.log(`Pairing code: ${running.pairing_code}`);
+      } else {
+        console.log("Pairing code: already printed by relay pairing create.");
+      }
+      console.log(`Pairing expires at: ${running.pairing_expires_at}`);
+      console.log("Raw pairing code is printed once and is not stored in .agentbridge.");
+      console.log("Keep this process running while GPT Actions use the hosted relay.");
+      const shutdown = async () => {
+        await running.close().catch(() => undefined);
+        process.exit(0);
+      };
+      process.once("SIGINT", () => void shutdown());
+      process.once("SIGTERM", () => void shutdown());
     } catch (error) {
       handleError(error);
     }

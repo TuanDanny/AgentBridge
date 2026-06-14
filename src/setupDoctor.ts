@@ -291,6 +291,17 @@ function launcherConfigCheck(root: string): DoctorCheck {
 function launcherPublicUrlCheck(root: string): DoctorCheck {
   try {
     const config = readLauncherConfig(root);
+    if (config?.tunnelMode === "relay") {
+      if (!config.relayUrl) {
+        return warn("launcher_relay_url", "Relay mode is configured but relayUrl is missing.", "Run setup launcher --tunnel-mode relay --relay-url <https-url>.");
+      }
+      const warnings = launcherWarnings(config);
+      const quickWarning = warnings.find((item) => item.includes("Quick Tunnel URL"));
+      if (quickWarning) {
+        return warn("launcher_relay_url", quickWarning, "Use a stable hosted relay origin for daily GPT Actions.");
+      }
+      return pass("launcher_relay_url", "Stable-looking hosted relay URL is configured.");
+    }
     if (!config?.publicBaseUrl) {
       return warn("launcher_public_url", "No publicBaseUrl is configured for one-click GPT Actions.", "Use a stable HTTPS URL with setup launcher.");
     }
@@ -308,6 +319,15 @@ function launcherPublicUrlCheck(root: string): DoctorCheck {
 async function launcherPublicHealthCheck(root: string): Promise<DoctorCheck> {
   try {
     const config = readLauncherConfig(root);
+    if (config?.tunnelMode === "relay") {
+      if (!config.relayUrl) {
+        return warn("launcher_relay_health", "No relayUrl configured, so relay /relay/health was not checked.", "Configure a trusted hosted relay URL.");
+      }
+      const response = await fetch(`${config.relayUrl.replace(/\/+$/, "")}/relay/health`, { signal: AbortSignal.timeout(2500) });
+      return response.ok
+        ? pass("launcher_relay_health", "Configured relay /relay/health is reachable.")
+        : warn("launcher_relay_health", diagnoseHttpStatus(response.status), "Check hosted relay deployment and URL.");
+    }
     if (!config?.publicBaseUrl) {
       return warn("launcher_public_health", "No publicBaseUrl configured, so public /health was not checked.", "Configure a stable public URL.");
     }
@@ -340,6 +360,12 @@ function launcherReadinessCheck(root: string): DoctorCheck {
     if (!pathExists(path.join(root, "dist", "cli.js"))) {
       return fail("launcher_one_click_readiness", "dist/cli.js is missing.", "Run npm run build before using start-codexlink.bat.");
     }
+    if (config.tunnelMode === "relay") {
+      if (!config.relayUrl) {
+        return warn("launcher_one_click_readiness", "Relay launcher can start locally, but relayUrl is missing.", "Configure --relay-url for zero-setup GPT Actions.");
+      }
+      return pass("launcher_one_click_readiness", "Launcher config, build, and hosted relay URL are ready.");
+    }
     if (!config.publicBaseUrl) {
       return warn("launcher_one_click_readiness", "Local one-click can start, but GPT Actions need a publicBaseUrl.", "Configure a stable HTTPS public URL.");
     }
@@ -357,16 +383,14 @@ function relayPlaceholderCheck(root: string): DoctorCheck {
   const launcher = readLauncherConfig(root);
   const relayProtocol = validateRelayProtocolSpec();
   if (!relayProtocol.ok) {
-    return fail("relay_protocol", `Relay protocol spec has ${relayProtocol.errors.length} validation error(s).`, "Fix relay protocol spec before implementing relay.");
+    return fail("relay_protocol", `Relay protocol spec has ${relayProtocol.errors.length} validation error(s).`, "Fix relay protocol and allowlist.");
   }
   if (launcher?.tunnelMode === "relay" || relayConfig) {
-    return warn(
-      "relay_mode",
-      RELAY_MODE_WARNING,
-      "Use a stable HTTPS endpoint now; only continue relay work after protocol, pairing, and security tests are specified."
-    );
+    return launcher?.relayUrl
+      ? pass("relay_mode", "Hosted relay mode is configured for metadata/inspector routes.")
+      : warn("relay_mode", RELAY_MODE_WARNING, "Configure setup launcher --tunnel-mode relay --relay-url <https-url>.");
   }
-  return warn("relay_mode", "Relay mode is not configured. This is expected until v1.2 relay work begins.", "Use stable tunnel/domain for GPT Actions today.");
+  return warn("relay_mode", "Relay mode is not configured.", "Use setup launcher --tunnel-mode relay --relay-url <https-url> for zero-setup relay.");
 }
 
 function relayPairingCheck(root: string): DoctorCheck {
@@ -647,12 +671,12 @@ export function setupCodexLauncher(rootInput = process.cwd(), options: LauncherS
 export function setupRelay(rootInput = process.cwd(), options: SetupOptions = {}): SetupResult {
   const root = resolveProjectRoot(rootInput);
   const checks: DoctorCheck[] = [
-    warn("relay_mode", RELAY_MODE_WARNING, "Use stable tunnel/domain for production until relay protocol and pairing are implemented."),
+    warn("relay_mode", RELAY_MODE_WARNING, "Configure setup launcher --tunnel-mode relay --relay-url <trusted-url>."),
     validateRelayProtocolSpec().ok
-      ? pass("relay_protocol", "Relay protocol spec validates as spec-only with bounded allowlisted routes.")
+      ? pass("relay_protocol", "Relay protocol validates as hosted MVP with bounded allowlisted routes.")
       : fail("relay_protocol", "Relay protocol spec validation failed.", "Fix relay protocol before continuing."),
-    pass("relay_security_guardrails", "Relay setup placeholder adds no command runner, no file write capability, and no OpenAI API key requirement."),
-    pass("relay_docs", "Relay roadmap is documented for future implementation.")
+    pass("relay_security_guardrails", "Relay adds no command runner, no file write capability, no HTTP MCP, and no OpenAI API key requirement."),
+    pass("relay_docs", "Hosted relay MVP is documented in docs/guides/CODEXLINK_HOSTED_RELAY.md.")
   ];
   const changedFiles: string[] = [];
   const relayConfig = bridgePath(root, "relay-config.json");
@@ -664,10 +688,10 @@ export function setupRelay(rootInput = process.cwd(), options: SetupOptions = {}
         {
           version: 1,
           enabled: false,
-          mode: "planned",
+          mode: "hosted_mvp",
           relay_url: null,
-          pairing: "not_implemented",
-          note: "Relay mode is a local placeholder. Production relay is not implemented yet."
+          pairing: "short_lived_code",
+          note: "Set relay_url through setup launcher --tunnel-mode relay --relay-url <trusted-url>."
         },
         null,
         2
@@ -682,10 +706,10 @@ export function setupRelay(rootInput = process.cwd(), options: SetupOptions = {}
     checks,
     changed_files: changedFiles,
     next_steps: [
-      "Use a stable public HTTPS endpoint today: setup launcher --public-url <url>.",
-      "Read docs/architecture/CODEXLINK_V1_2_ZERO_SETUP_ROADMAP.md before implementing relay.",
-      "Do not expose shell, write-file, local auth token, or raw file content through relay.",
-      "Keep relay mode experimental until hosted production relay pairing, revocation, and audit are fully tested."
+      "Deploy or choose a trusted hosted relay URL.",
+      "Run setup launcher --tunnel-mode relay --relay-url <trusted-url>.",
+      "Import openapi.codexlink.relay.gpt-actions.json into GPT Actions.",
+      "Do not expose shell, write-file, local auth token, or raw file content through relay."
     ]
   };
 }

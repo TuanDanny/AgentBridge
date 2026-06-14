@@ -18,6 +18,9 @@ export interface LauncherConfig {
   relayHost: string;
   relayPort: number;
   autoRelay: boolean;
+  relayUrl?: string;
+  autoRelayClient: boolean;
+  relayDeviceId?: string;
 }
 
 export interface LauncherSetupOptions {
@@ -35,6 +38,9 @@ export interface LauncherSetupOptions {
   relayHost?: string;
   relayPort?: number;
   autoRelay?: boolean;
+  relayUrl?: string;
+  autoRelayClient?: boolean;
+  relayDeviceId?: string;
 }
 
 export interface LauncherValidationResult {
@@ -57,7 +63,7 @@ export interface LauncherSetupResult {
 export const QUICK_TUNNEL_WARNING =
   "Quick Tunnel URL is temporary. GPT Actions may need schema update after restart. Use a stable tunnel/domain for one-click GPTs usage.";
 export const RELAY_MODE_WARNING =
-  "Relay mode is experimental. The launcher can prepare local pairing metadata and the relay GPT Actions schema, but a hosted stable relay is not production-ready yet.";
+  "Relay mode uses a hosted MVP relay. Use only a trusted relay URL; pairing is short-lived and relay forwarding stays metadata/inspector only.";
 
 export function launcherConfigPath(rootInput = process.cwd()): string {
   return bridgePath(resolveProjectRoot(rootInput), "launcher-config.json");
@@ -76,7 +82,8 @@ export function defaultLauncherConfig(rootInput = process.cwd()): LauncherConfig
     tunnelMode: "stable",
     relayHost: "127.0.0.1",
     relayPort: 8787,
-    autoRelay: true
+    autoRelay: true,
+    autoRelayClient: true
   };
 }
 
@@ -99,6 +106,7 @@ export function validateLauncherConfig(rootInput: string, input: Partial<Launche
   const tunnelMode = validateTunnelMode(input.tunnelMode ?? inferTunnelMode(publicBaseUrl, defaults.tunnelMode));
   const relayHost = validateRelayHost(input.relayHost ?? defaults.relayHost);
   const relayPort = validatePort(input.relayPort ?? defaults.relayPort, "Launcher relayPort");
+  const relayUrl = validateOptionalRelayUrl(input.relayUrl, "relayUrl");
   const config: LauncherConfig = {
     projectId,
     host,
@@ -110,7 +118,8 @@ export function validateLauncherConfig(rootInput: string, input: Partial<Launche
     tunnelMode,
     relayHost,
     relayPort,
-    autoRelay: input.autoRelay ?? defaults.autoRelay
+    autoRelay: input.autoRelay ?? defaults.autoRelay,
+    autoRelayClient: input.autoRelayClient ?? defaults.autoRelayClient
   };
   if (publicBaseUrl) {
     config.publicBaseUrl = publicBaseUrl;
@@ -118,13 +127,23 @@ export function validateLauncherConfig(rootInput: string, input: Partial<Launche
   if (gptUrl) {
     config.gptUrl = gptUrl;
   }
+  if (relayUrl) {
+    config.relayUrl = relayUrl;
+  }
+  if (input.relayDeviceId?.trim()) {
+    config.relayDeviceId = input.relayDeviceId.trim();
+  }
   warnings.push(...launcherWarnings(config));
   return { config, warnings };
 }
 
 export function launcherWarnings(config: LauncherConfig): string[] {
   const warnings: string[] = [];
-  if (!config.publicBaseUrl) {
+  if (config.tunnelMode === "relay" && config.relayUrl) {
+    if (isQuickTunnelUrl(config.relayUrl)) {
+      warnings.push(QUICK_TUNNEL_WARNING);
+    }
+  } else if (!config.publicBaseUrl) {
     warnings.push(
       config.tunnelMode === "relay"
         ? RELAY_MODE_WARNING
@@ -155,7 +174,10 @@ export function setupLauncher(rootInput = process.cwd(), options: LauncherSetupO
     tunnelMode: options.tunnelMode ?? existing.tunnelMode,
     relayHost: options.relayHost ?? existing.relayHost,
     relayPort: options.relayPort ?? existing.relayPort,
-    autoRelay: options.autoRelay ?? existing.autoRelay
+    autoRelay: options.autoRelay ?? existing.autoRelay,
+    relayUrl: options.relayUrl ?? existing.relayUrl,
+    autoRelayClient: options.autoRelayClient ?? existing.autoRelayClient,
+    relayDeviceId: options.relayDeviceId ?? existing.relayDeviceId
   });
   const changedFiles: string[] = [];
   const configPath = launcherConfigPath(root);
@@ -207,10 +229,11 @@ function launcherNextSteps(config: LauncherConfig): string[] {
     return [
       ...base,
       "Import openapi.codexlink.relay.gpt-actions.json only when using a trusted relay origin.",
-      "Use node dist/cli.js relay pairing create to create a short-lived pairing code.",
-      `The launcher can auto-start the loopback relay prototype at http://${config.relayHost}:${config.relayPort}.`,
-      "For manual local prototype testing, run node dist/cli.js relay serve --experimental.",
-      "Use a stable public URL/domain until a production relay is available."
+      config.relayUrl
+        ? `The launcher can auto-start the hosted relay client for ${config.relayUrl}.`
+        : `The launcher can auto-start the loopback relay prototype at http://${config.relayHost}:${config.relayPort}.`,
+      "Pair GPT Actions with the short-lived code printed by the relay client.",
+      "Use a trusted stable relay origin for true zero-setup daily use."
     ];
   }
   return [...base, "Use a stable public URL/domain for reliable GPT Actions."];
@@ -283,6 +306,19 @@ function validateOptionalHttpUrl(value: string | undefined, field: string): stri
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new Error(`${field} must use http:// or https://.`);
   }
+  return url.toString().replace(/\/$/, "");
+}
+
+function validateOptionalRelayUrl(value: string | undefined, field: string): string | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  const url = parseUrl(value, field);
+  const isLoopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
+  if (url.protocol !== "https:" && url.protocol !== "wss:" && !(isLoopback && (url.protocol === "http:" || url.protocol === "ws:"))) {
+    throw new Error(`${field} must use https:// or wss://, except loopback test URLs may use http:// or ws://.`);
+  }
+  url.protocol = url.protocol === "wss:" ? "https:" : url.protocol === "ws:" ? "http:" : url.protocol;
   return url.toString().replace(/\/$/, "");
 }
 

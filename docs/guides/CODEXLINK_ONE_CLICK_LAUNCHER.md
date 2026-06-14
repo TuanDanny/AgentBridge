@@ -109,31 +109,31 @@ Current choices:
 
 If no public URL is configured, the launcher will still start local CodexLink and copy the greeting, but GPT Actions cannot call your local machine directly.
 
-Relay planning placeholder:
+Hosted relay mode:
 
 ```powershell
-node dist\cli.js setup relay --dry-run
 node dist\cli.js relay spec
-```
-
-This command does not start or implement a production relay. It exists to make the future zero-setup path explicit while keeping v1.1 safe.
-
-Experimental relay launcher mode:
-
-```powershell
-node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay
+node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay --relay-url https://relay.codexlink.example.com
 start-codexlink.bat
 ```
 
-When relay mode is configured, the launcher still starts the local AgentBridge server and bootstraps the shared session. It also starts or reuses the loopback-only relay prototype at `http://127.0.0.1:8787`, creates a short-lived relay pairing code, prints it once for the user, and adds relay instructions to the copied GPT greeting. The raw pairing code is not written to the launcher log. Use `openapi.codexlink.relay.gpt-actions.json` only with a trusted relay origin. The included `relay serve --experimental` command is a local prototype, not a hosted production relay.
+When relay mode is configured with `relayUrl`, the launcher starts local AgentBridge, creates a short-lived pairing code, starts the outbound hosted relay client, prints/copies the pairing code once, and adds relay instructions to the copied GPT greeting. The raw pairing code is not written to the launcher log.
 
-To change the local relay prototype port:
+Deploy the hosted relay MVP behind HTTPS/WSS:
 
 ```powershell
-node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay --relay-port 8788
+node dist\cli.js relay hosted serve --host 0.0.0.0 --port 8788 --public-url https://relay.codexlink.example.com
 ```
 
-`relayHost` is intentionally restricted to loopback hosts (`127.0.0.1`, `localhost`, or `::1`) so the prototype is not accidentally exposed.
+Use `openapi.codexlink.relay.gpt-actions.json` only with a trusted relay origin.
+
+Local loopback relay prototype is still available for testing:
+
+```powershell
+node dist\cli.js relay serve --experimental --host 127.0.0.1 --port 8787
+```
+
+`relayHost` for the prototype is intentionally restricted to loopback hosts (`127.0.0.1`, `localhost`, or `::1`) so it is not accidentally exposed.
 
 ## Stable Endpoint Recommended
 

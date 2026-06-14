@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerCurrentProject } from "../src/registry.js";
+import { registerCurrentProject, registerProject } from "../src/registry.js";
 import { appendSessionActivity, bootstrapSession } from "../src/sessionStore.js";
 import { createRelayEnvelope, dispatchRelayRequestLocally } from "../src/relayLocalDispatch.js";
 
@@ -67,6 +67,34 @@ describe("relay local dispatcher", () => {
     expect(JSON.stringify({ summary, context, timeline })).not.toContain("Bearer ");
   });
 
+  it("dispatches inspector and safe project file metadata through the relay allowlist", () => {
+    const root = makeTempRoot();
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "relay-dispatch-fixture" }, null, 2));
+    fs.writeFileSync(path.join(root, "README.md"), "# Relay Dispatch Fixture\n\nsessionStore marker\n");
+    registerCurrentProject(root, "RelayProject");
+    bootstrapSession(root, "RelayProject", { actor: "codex", client: "codex", adapter: "cli", source: "relay_dispatch_test" });
+
+    const inspect = dispatchRelayRequestLocally(root, createRelayEnvelope("inspectProject", "RelayProject"));
+    const changes = dispatchRelayRequestLocally(root, createRelayEnvelope("getCodexChanges", "RelayProject"));
+    const review = dispatchRelayRequestLocally(root, createRelayEnvelope("getReviewPacket", "RelayProject"));
+    const tree = dispatchRelayRequestLocally(root, createRelayEnvelope("getProjectTree", "RelayProject", { max_entries: 20 }));
+    const files = dispatchRelayRequestLocally(root, createRelayEnvelope("searchProjectFiles", "RelayProject", { q: "README" }));
+    const read = dispatchRelayRequestLocally(root, createRelayEnvelope("readProjectFile", "RelayProject", { path: "README.md", max_chars: 200 }));
+    const grep = dispatchRelayRequestLocally(root, createRelayEnvelope("searchProjectText", "RelayProject", { q: "sessionStore", max_matches: 5 }));
+
+    for (const result of [inspect, changes, review, tree, files, read, grep]) {
+      expect(result.ok).toBe(true);
+      expect(result.status).toBe(200);
+      expect(result.metadata).toMatchObject({ validated: true, local_only: true, content_stored: false });
+    }
+    expect(JSON.stringify(tree.data)).toContain("recommended_next_reads");
+    expect(JSON.stringify(files.data)).toContain("README.md");
+    expect(JSON.stringify(read.data)).toContain("Relay Dispatch Fixture");
+    expect(JSON.stringify(grep.data)).toContain("sessionStore");
+    expect(JSON.stringify({ inspect, changes, review, tree, files, read, grep })).not.toContain(root);
+    expect(JSON.stringify({ inspect, changes, review, tree, files, read, grep })).not.toContain("local_token");
+  });
+
   it("rejects unknown projects, raw paths, and non-allowlisted relay operations", () => {
     const root = makeTempRoot();
     registerCurrentProject(root, "RelayProject");
@@ -89,5 +117,35 @@ describe("relay local dispatcher", () => {
     expect(unknownProject.status).toBe(404);
     expect(rawPath.ok).toBe(false);
     expect(mcp.ok).toBe(false);
+  });
+
+  it("filters relay project listing and dispatch by the local client allowed project list", () => {
+    const root = makeTempRoot();
+    const otherRoot = path.join(root, "other");
+    fs.mkdirSync(otherRoot);
+    fs.writeFileSync(path.join(root, "README.md"), "allowed project\n");
+    fs.writeFileSync(path.join(otherRoot, "README.md"), "other project\n");
+    registerCurrentProject(root, "AllowedProject");
+    registerProject(root, "OtherProject", otherRoot);
+
+    const listed = dispatchRelayRequestLocally(root, createRelayEnvelope("listProjects"), { allowedProjectIds: ["AllowedProject"] });
+    expect(listed.ok).toBe(true);
+    expect(JSON.stringify(listed.data)).toContain("AllowedProject");
+    expect(JSON.stringify(listed.data)).not.toContain("OtherProject");
+
+    const allowed = dispatchRelayRequestLocally(
+      root,
+      createRelayEnvelope("readProjectFile", "AllowedProject", { path: "README.md" }),
+      { allowedProjectIds: ["AllowedProject"] }
+    );
+    const blocked = dispatchRelayRequestLocally(
+      root,
+      createRelayEnvelope("readProjectFile", "OtherProject", { path: "README.md" }),
+      { allowedProjectIds: ["AllowedProject"] }
+    );
+
+    expect(allowed.ok).toBe(true);
+    expect(blocked.ok).toBe(false);
+    expect(blocked.status).toBe(404);
   });
 });

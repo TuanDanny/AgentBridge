@@ -631,17 +631,19 @@ describe("compiled CLI smoke tests", () => {
     expect(JSON.stringify(setup)).not.toContain("OPENAI_API_KEY");
   });
 
-  it("prints relay protocol spec without enabling production relay", () => {
+  it("prints hosted relay protocol spec without exposing forbidden routes", () => {
     const registryRoot = makeTempRoot("agentbridge-cli-relay-spec-");
     const output = runCli(registryRoot, "relay", "spec", "--json");
     const result = JSON.parse(output);
     expect(result.ok).toBe(true);
-    expect(result.spec.status).toBe("spec_only");
+    expect(result.spec.status).toBe("hosted_mvp");
     expect(result.spec.pairing.required).toBe(true);
     expect(result.spec.allowed_routes.some((route: { operation_id: string }) => route.operation_id === "getSessionSummary")).toBe(true);
     expect(output).not.toContain("/mcp");
     expect(output).not.toContain("local_token");
     expect(output).not.toContain("OPENAI_API_KEY");
+    expect(output).not.toContain("write_file");
+    expect(output).not.toContain("command_runner");
   });
 
   it("supports relay pairing CLI without storing raw code values", () => {

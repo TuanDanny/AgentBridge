@@ -1,6 +1,6 @@
 # CodexLink v1.2 Zero-Setup Launcher Roadmap
 
-This is a planning document. It does not implement a production relay server.
+This roadmap is historical context for the v1.2 relay work. The current codebase includes a hosted relay MVP for paired metadata/inspector routes; it is still not a hosted account/team/cloud workspace service and does not add write, shell, or HTTP MCP capability.
 
 The v1.2 goal is to move closer to a real beginner-friendly flow:
 
