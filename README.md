@@ -1,209 +1,227 @@
 # CodexLink
 
-**CodexLink** is a local-first bridge between ChatGPT/GPTs, Codex UI, MCP, CLI, and local project workspaces.
+<img src="docs/assets/codexlink-banner.svg" alt="CodexLink - ChatGPT x Codex x Local Workspace Memory" />
 
-The backend/package name is still `agentbridge`, but the product name is **CodexLink**. Version `1.0.0` is the stable local workspace memory release: it lets GPTs and Codex understand not only final handoffs, but also recent activity, checks, evidence, workspace snapshots, changed files, and task timelines.
+**Local-first bridge for ChatGPT/GPTs, Codex UI, MCP, and workspace memory.**
 
----
+![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6)
+![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Local First](https://img.shields.io/badge/Local--first-yes-blue)
+![GPT Actions](https://img.shields.io/badge/GPT%20Actions-supported-purple)
+![MCP](https://img.shields.io/badge/MCP-STDIO--only-orange)
+![Tests](https://img.shields.io/badge/Tests-161%20passing-brightgreen)
 
-## What It Can Do
+CodexLink helps ChatGPT/GPTs and Codex understand a local project safely: explicit project registry, shared session memory, Activity Trace, Workspace Timeline, one-click Windows launcher, GPT Actions schemas, Codex MCP tools, and a zero-setup stable relay MVP.
 
-- Register explicit local projects.
-- List and select active projects.
-- Safely inspect project tree, file names, text files, and grep results.
-- Keep shared session memory across ChatGPT/GPTs, Codex, MCP, and CLI.
-- Track Activity Trace through `recent_activity` and `activity_counts`.
-- Record handoff lifecycle metadata.
-- Record evidence and check metadata.
-- Record workspace snapshots.
-- Record changed-files summaries.
-- Detect activity gaps when files changed without matching recent activity.
-- Build timelines by recent activity, handoff, file, or task.
-- Return compact resume context for GPTs/Codex.
-- Verify safe file metadata without storing file content.
-- Bootstrap Codex sessions through the local Codex plugin `SessionStart` hook.
-- Expose MCP tools for shared session coordination over STDIO.
+The npm/package backend name is still `agentbridge`; the product name is **CodexLink**.
+
+> **Honest status:** local/project memory, launcher, GPT Actions, plugin, activity trace, and workspace timeline are tested. The hosted relay is an MVP/experimental path for stable GPT Actions endpoints, not a production SaaS account/team workspace.
 
 ---
 
-## Quick Start On A New Machine
+## Why CodexLink
+
+| Value | What it means |
+| --- | --- |
+| Safe local project picker | GPTs can inspect only explicitly registered local projects. |
+| Shared workspace memory | GPTs, Codex UI, MCP, and CLI can share session goals, handoffs, checks, evidence, and recent activity. |
+| Activity Trace | CodexLink records what happened: handoff lifecycle, checks, evidence, file/workspace metadata. |
+| Workspace Timeline | Ask what changed by handoff, file, task, or recent activity. |
+| One-click launcher | On Windows, daily startup can be `start-codexlink.bat`. |
+| Relay MVP | A stable HTTPS relay URL can forward paired metadata/inspector requests over outbound WSS. |
+| Safe inspector | Read-only project tree, file search, bounded file read, grep, and review packets. |
+| No OpenAI API key | CodexLink does not require an OpenAI API key. |
+| No command runner | Relay/GPT Actions do not expose arbitrary shell execution. |
+| No HTTP MCP | MCP remains STDIO-only; there is no `/mcp` HTTP endpoint. |
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  GPT["ChatGPT / GPTs"] -->|"GPT Actions"| HTTPS["Stable HTTPS Endpoint"]
+  HTTPS --> Relay["CodexLink Relay MVP"]
+  Relay -->|"Outbound WebSocket"| Client["Local Relay Client"]
+  Client --> Local["AgentBridge Local Server"]
+  Local --> Registry["Project Registry"]
+  Local --> Session["Shared Session Memory"]
+  Local --> Workspace["Safe Workspace Inspector"]
+  Codex["Codex UI / MCP"] --> Local
+```
+
+Quick tunnel and direct stable tunnel/domain flows are still supported. Relay mode is the zero-setup/stable-endpoint direction. In every mode, the local server remains the safety boundary and revalidates project IDs, paths, and read policies.
+
+---
+
+## Quick Start
+
+### Flow A: Local Launcher Only
 
 ```powershell
 git clone https://github.com/TuanDanny/AgentBridge.git
 cd AgentBridge
-.\setup-codexlink-first-time.bat
-```
-
-The first-time setup script checks Node/npm, optionally pulls the latest `main`, installs dependencies, builds `dist/`, registers the current repo as a project, creates launcher config, and can start CodexLink.
-
-For automation or a no-prompt setup check:
-
-```powershell
-.\setup-codexlink-first-time.bat --defaults --no-start
-```
-
-If you prefer manual setup:
-
-```powershell
 npm install
 npm run build
 node dist\cli.js project register-current AgentBridge
+node dist\cli.js setup launcher --project AgentBridge
 .\start-codexlink.bat
 ```
 
-The local server creates:
+For the guided first-time Windows flow:
 
-```text
-.agentbridge/local_token
+```powershell
+.\setup-codexlink-first-time.bat
 ```
 
-Do not commit, print, or share this token.
+### Flow B: Hosted Relay MVP / Stable GPT Actions Path
+
+Use this when GPT Actions need one stable HTTPS URL and you do not want to update a quick tunnel URL repeatedly.
+
+1. Deploy or run the hosted relay MVP behind HTTPS/WSS.
+2. Import `openapi.codexlink.relay.gpt-actions.json` into GPT Builder.
+3. Configure the local launcher with the trusted relay URL.
+4. Pair the device/session with the short-lived pairing code.
+
+Start here:
+
+- [Hosted Relay Guide](docs/guides/CODEXLINK_HOSTED_RELAY.md)
+- [Relay Protocol Spec](docs/specs/CODEXLINK_RELAY_PROTOCOL.md)
 
 ---
 
-## One-Click Daily Launcher
+## Daily Usage
 
-After install/build, daily use can be:
+Start:
 
 ```powershell
 .\start-codexlink.bat
 ```
 
-On first run, the launcher creates local launcher config if it is missing. It starts the local server, waits for `/health`, bootstraps the shared session if configured, copies a GPT greeting prompt, and can open your configured GPT URL.
+The launcher:
 
-For GPT Actions to call back without URL changes, configure a stable HTTPS endpoint:
+- starts or reuses local AgentBridge
+- checks `/health`
+- bootstraps shared session context
+- copies a GPT greeting prompt
+- opens the configured GPT URL when configured
+- starts the hosted relay client when relay mode is configured
 
-```powershell
-node dist\cli.js setup launcher --project AgentBridge --public-url https://codexlink.example.com --gpt-url https://chatgpt.com/g/YOUR-GPT
-node dist\cli.js setup gpt-actions --public-url https://codexlink.example.com
-```
-
-Quick tunnel URLs are temporary and may require schema updates. For zero-setup daily GPT Actions, use a trusted hosted relay:
-
-```powershell
-node dist\cli.js relay hosted serve --host 0.0.0.0 --port 8788 --public-url https://relay.codexlink.example.com
-```
-
-Then configure the user machine once:
+Stop:
 
 ```powershell
-node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay --relay-url https://relay.codexlink.example.com --gpt-url https://chatgpt.com/g/YOUR-GPT
-.\start-codexlink.bat
-```
-
-In hosted relay mode the launcher starts local AgentBridge, creates a short-lived pairing code, starts an outbound WSS relay client, copies a GPT greeting, and can open the configured GPT URL. GPT Actions uses one stable relay HTTPS origin and the `X-CodexLink-Relay-Session` header returned by `pairDevice`.
-
-The legacy loopback relay prototype is still available for local-only testing:
-
-```powershell
-node dist\cli.js relay serve --experimental
-```
-
-Relay smoke tests:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-relay-loopback.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-hosted-relay-e2e.ps1
-```
-
-Relay GPT Actions schema:
-
-```text
-openapi.codexlink.relay.gpt-actions.json
-```
-
-Use the regular `openapi.agentbridge.gpt-actions.json` for direct stable tunnel/domain setup. Use `openapi.codexlink.relay.gpt-actions.json` for a trusted relay origin and paired metadata/inspector routes only.
-
-Guide: `docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md`
-
-Hosted relay guide: `docs/guides/CODEXLINK_HOSTED_RELAY.md`
-
-Zero-setup stable relay design: `docs/architecture/CODEXLINK_ZERO_SETUP_RELAY_PLAN.md`
-
-v1.2 roadmap: `docs/architecture/CODEXLINK_V1_2_ZERO_SETUP_ROADMAP.md`
-
----
-
-## Register A Local Project
-
-Register an explicit project root:
-
-```powershell
-node dist\cli.js project register MyProject D:\Projects\MyProject
-node dist\cli.js project list
-node dist\cli.js project select MyProject
-```
-
-Register the current repo:
-
-```powershell
-node dist\cli.js project register-current AgentBridge
-```
-
-CodexLink only exposes projects you register or scan-confirm. It does not scan your whole machine automatically.
-
----
-
-## Shared Session And Activity Usage
-
-```powershell
-node dist\cli.js session bootstrap MyProject --source manual --json
-node dist\cli.js session activity MyProject --json
-node dist\cli.js session timeline MyProject --recent --json
-node dist\cli.js session context MyProject --compact --json
-node dist\cli.js session reconcile MyProject --json
-node dist\cli.js session file-verify MyProject --path README.md --json
-```
-
-Useful timeline filters:
-
-```powershell
-node dist\cli.js session timeline MyProject --handoff handoff_000001 --json
-node dist\cli.js session timeline MyProject --file src/example.ts --json
-node dist\cli.js session timeline MyProject --task task-123 --json
+.\stop-codexlink.bat
 ```
 
 ---
 
-## Safe Project Browsing
+## Feature Matrix
 
-```powershell
-node dist\cli.js project tree MyProject --json
-node dist\cli.js project find-file MyProject README --json
-node dist\cli.js project read-file MyProject README.md --json
-node dist\cli.js project grep MyProject "readProjectFile" --json
-node dist\cli.js project inspect MyProject --json
-```
-
-Safe readers use project-relative paths only.
+| Capability | Status |
+| --- | --- |
+| Safe project registry | Passed |
+| GPT Actions project inspector | Passed |
+| Shared session memory | Passed |
+| Activity Trace | Passed |
+| Workspace Timeline | Passed |
+| Codex plugin SessionStart | Passed |
+| One-click launcher | Passed |
+| Relay GPT Actions schema | Passed |
+| Zero-setup stable relay MVP | Experimental |
+| Image artifact endpoint | Planned |
+| Safe local edit / patch proposal | Planned |
+| Docker packaging | Planned |
 
 ---
 
-## GPT Actions Setup
+## Security Model
 
-Generate a GPT Actions-ready schema:
+CodexLink is designed as a local-first bridge, not a remote workspace control plane.
+
+- Projects must be explicitly registered or selected.
+- Relay mode uses a per-device project allowlist.
+- Pairing codes are short-lived and single-use.
+- Hosted relay MVP stores pairing/session metadata in memory.
+- Local AgentBridge remains the source of truth.
+- No HTTP `/mcp` endpoint is exposed.
+- No arbitrary shell or command runner is exposed.
+- No write/edit/delete file route is exposed.
+- No OpenAI API key is required.
+- Safe file reads are bounded, redacted, and project-relative.
+- `.env`, `.agentbridge/local_token`, private keys, binaries, traversal paths, and raw filesystem project IDs are blocked.
+- Secrets and local tokens must never be committed, pasted into prompts, or shared.
+
+---
+
+## GPT Actions Schemas
+
+| Schema | Use case |
+| --- | --- |
+| `openapi.agentbridge.gpt-actions.json` | Direct stable tunnel/domain mode with bearer auth. |
+| `openapi.codexlink.relay.gpt-actions.json` | Hosted relay MVP mode with `X-CodexLink-Relay-Session`. |
+
+Generate schemas:
+
+```powershell
+npm run generate:openapi
+```
+
+Direct GPT Actions helper:
 
 ```powershell
 .\scripts\prepare-gpt-action.ps1
 ```
 
-Then in GPT Builder:
+---
 
-```text
-Actions -> paste schema -> Authentication: API Key / Bearer -> paste local token -> Save -> Update GPT
+## Common Commands
+
+Register projects:
+
+```powershell
+node dist\cli.js project register-current AgentBridge
+node dist\cli.js project list
+node dist\cli.js project select AgentBridge
 ```
 
-Important:
+Session memory and timeline:
 
-- Paste only the token value.
-- Do not paste `Bearer <token>`.
-- Do not commit or share `.agentbridge/local_token`.
-- Cloudflare quick tunnel URLs can change after restart.
-- Use `openapi.agentbridge.gpt-actions.json` if GPT Builder rejects the canonical schema.
+```powershell
+node dist\cli.js session bootstrap AgentBridge --source manual --json
+node dist\cli.js session context AgentBridge --compact --json
+node dist\cli.js session timeline AgentBridge --recent --json
+node dist\cli.js session reconcile AgentBridge --json
+```
+
+Safe project browsing:
+
+```powershell
+node dist\cli.js project tree AgentBridge --json
+node dist\cli.js project find-file AgentBridge README --json
+node dist\cli.js project read-file AgentBridge README.md --json
+node dist\cli.js project grep AgentBridge "readProjectFile" --json
+node dist\cli.js project inspect AgentBridge --json
+```
+
+Relay MVP:
+
+```powershell
+node dist\cli.js relay hosted serve --host 0.0.0.0 --port 8788 --public-url https://relay.codexlink.example.com
+node dist\cli.js relay client connect --relay-url https://relay.codexlink.example.com --project AgentBridge
+node dist\cli.js relay spec
+```
+
+Diagnostics:
+
+```powershell
+node dist\cli.js doctor
+node dist\cli.js doctor --launcher --json
+```
 
 ---
 
-## Codex Plugin Setup
+## Codex Plugin
 
 The local Codex plugin lives in:
 
@@ -211,139 +229,70 @@ The local Codex plugin lives in:
 plugins/codexlink/
 ```
 
-Setup flow:
+It provides:
 
-1. Enable the repo-local marketplace in Codex.
-2. Enable the CodexLink plugin.
-3. Review and trust the `SessionStart` hook once.
-4. Open a new Codex chat.
+- bundled MCP server config
+- shared session skill instructions
+- SessionStart hook
+- repo-local marketplace entry
 
-The hook bootstraps the shared session and lets Codex use `session_context` / `session_timeline` to resume context without long pasted prompts.
-
-Detailed setup:
-
-```text
-docs/guides/CODEXLINK_PLUGIN_SETUP.md
-```
-
-Dry-run:
-
-```powershell
-node plugins/codexlink/hooks/session_start.mjs --dry-run
-```
-
-Diagnostics:
+Setup:
 
 ```powershell
 node dist\cli.js setup codex-plugin --dry-run
-node dist\cli.js doctor
-node dist\cli.js doctor --json
+node plugins/codexlink/hooks/session_start.mjs --dry-run
 ```
 
----
-
-## MCP Tools
-
-MCP remains STDIO-only. CodexLink does not expose an HTTP `/mcp` endpoint.
-
-Important shared session MCP tools include:
-
-- `session_bootstrap`
-- `session_summary`
-- `session_updates`
-- `session_activity`
-- `session_timeline`
-- `session_context`
-- `session_reconcile`
-- `session_append_event`
-- `session_add_handoff`
-- `session_update_handoff`
-- `session_set_goal`
-- `session_append_check`
+Guide: [CodexLink Plugin Setup](docs/guides/CODEXLINK_PLUGIN_SETUP.md)
 
 ---
 
-## Safety Model
+## Documentation
 
-CodexLink is local-first and allowlist-based.
-
-Blocked or avoided by design:
-
-- `.env` and `.env.*`
-- `.agentbridge/local_token`
-- private keys such as `.pem`, `.key`, `id_rsa`, `id_ed25519`
-- binary files
-- path traversal such as `../secret`
-- raw absolute file paths as project IDs
-- raw file content in session memory
-- long raw terminal output in session memory
-- raw diffs in session memory
-- token-like values, which are redacted
-- HTTP `/mcp`
-- arbitrary command runner
-- OpenAI API key requirement
-
-Large safe text files are bounded and returned with truncation metadata instead of unlimited reads.
+- [One-Click Launcher](docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md)
+- [Hosted Relay MVP](docs/guides/CODEXLINK_HOSTED_RELAY.md)
+- [Relay Protocol Spec](docs/specs/CODEXLINK_RELAY_PROTOCOL.md)
+- [Zero-Setup Relay Plan](docs/architecture/CODEXLINK_ZERO_SETUP_RELAY_PLAN.md)
+- [CodexLink Plugin Setup](docs/guides/CODEXLINK_PLUGIN_SETUP.md)
+- [Activity Trace](docs/guides/CODEXLINK_ACTIVITY_TRACE.md)
+- [Project Registry](docs/architecture/PROJECT_REGISTRY.md)
+- [GPT Tool Adapter](docs/gpt/CHATGPT_TOOL_ADAPTER.md)
 
 ---
 
-## Current Status
-
-| Milestone | Status |
-|---|---|
-| v0.4 Direct GPT Action handshake | Passed |
-| v0.5 Project registry / safe reader | Passed |
-| v0.6 Shared session workspace memory | Passed |
-| v0.7 Codex plugin auto session | Passed |
-| v1.0 Activity Trace & Workspace Timeline | Passed |
-| v1.1 One-Click Launcher | Local implemented |
-| v1.2 Zero-Setup Stable Relay | Planned/design |
-| v1.3 Safe Local Edit / Patch Proposal | Planned |
-| Docker packaging | Planned |
-
----
-
-## Development Checks
+## Verification
 
 ```powershell
 npm run generate:openapi
 npm run build
 npm test
 git diff --check
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-hosted-relay-e2e.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-relay-loopback.ps1
 ```
 
-Smoke tests:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v08-activity-core.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v08-session-activity.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v08-workspace-timeline.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v08-final-timeline.ps1
-```
+Current local acceptance: 24 test files / 161 tests passing.
 
 ---
 
-## Docker
+## Roadmap
 
-Docker packaging is not included in `v1.0.0`. Dockerfile/container deployment will be handled in a later version.
-
----
-
-## Documentation
-
-Additional docs live under `docs/`:
-
-- `docs/guides/` for plugin, bridge, tunnel, and activity workflows.
-- `docs/architecture/` for inspector and registry design notes.
-- `docs/specs/` for MCP, safety, and protocol specs.
-- `docs/gpt/` for GPT Actions setup and instructions.
-- `docs/acceptance/` for milestone acceptance records.
+- v1.2 relay MVP hardening
+- image artifact endpoint for GPT-rendered diagrams
+- safe patch proposal / edit review loop
+- Docker packaging
+- stable installer
 
 ---
 
-## Notes
+## Limitations
 
-- CodexLink does not require an OpenAI API key.
-- GPT Actions use your local CodexLink bearer token, not an OpenAI API key.
-- Runtime `.agentbridge` files are local-only and must not be committed.
-- Stable tunnel/domain setup is separate from the local v1.0.0 release.
+> If you use Cloudflare Quick Tunnel, the GPT Actions URL can change. For no URL changes, use a stable tunnel/domain or relay mode.
+
+> Relay MVP is experimental until deployed and security-tested in real use. It is intentionally read-only for workspace data and does not provide account/team/cloud workspace mode.
+
+---
+
+## License
+
+MIT

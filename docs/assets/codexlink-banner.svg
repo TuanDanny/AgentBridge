@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">CodexLink</title>
+  <desc id="desc">ChatGPT x Codex x Local Workspace Memory</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="52%" stop-color="#12343b"/>
+      <stop offset="100%" stop-color="#1f2937"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="360" rx="24" fill="url(#bg)"/>
+  <rect x="42" y="42" width="1116" height="276" rx="18" fill="none" stroke="#67e8f9" stroke-opacity="0.42" stroke-width="2"/>
+  <text x="84" y="140" fill="#f8fafc" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="72" font-weight="700">CodexLink</text>
+  <text x="88" y="196" fill="#cbd5e1" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="30">ChatGPT x Codex x Local Workspace Memory</text>
+  <text x="88" y="256" fill="#67e8f9" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="25">Local-first • GPT Actions • MCP • Activity Trace • Relay MVP</text>
+  <text x="860" y="142" fill="#a7f3d0" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="24">safe project inspector</text>
+  <text x="860" y="184" fill="#a7f3d0" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="24">shared session memory</text>
+  <text x="860" y="226" fill="#a7f3d0" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="24">workspace timeline</text>
+</svg>
