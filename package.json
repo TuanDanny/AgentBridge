@@ -12,10 +12,8 @@
     "setup-codexlink-first-time.bat",
     "start-codexlink.bat",
     "stop-codexlink.bat",
-    "DEMO.md",
     "docs/acceptance",
     "docs/architecture",
-    "docs/archive",
     "docs/gpt",
     "docs/guides",
     "docs/specs",
@@ -25,8 +23,7 @@
     "openapi.agentbridge.json",
     "openapi.agentbridge.gpt-actions.json",
     "openapi.codexlink.relay.gpt-actions.json",
-    "SESSION_SCHEMA.json",
-    "GUIDE.md"
+    "SESSION_SCHEMA.json"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

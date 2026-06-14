@@ -81,8 +81,8 @@ const IMPORTANT_FILE_NAMES = new Map<string, { reason: string; priority: Candida
   ["ARCHITECTURE.md", { reason: "architecture overview", priority: "high" }],
   ["AI_CONTEXT.md", { reason: "project context", priority: "high" }],
   ["AGENTS.md", { reason: "agent instructions", priority: "high" }],
-  ["GUIDE.md", { reason: "usage guide", priority: "medium" }],
-  ["DEMO.md", { reason: "demo workflow", priority: "medium" }],
+  ["CODEXLINK_ONE_CLICK_LAUNCHER.md", { reason: "one-click launcher guide", priority: "medium" }],
+  ["CODEXLINK_HOSTED_RELAY.md", { reason: "hosted relay guide", priority: "medium" }],
   ["package.json", { reason: "project config and scripts", priority: "high" }],
   ["tsconfig.json", { reason: "TypeScript config", priority: "medium" }],
   ["vitest.config.ts", { reason: "test configuration", priority: "medium" }]

@@ -9,3 +9,6 @@ npm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+RELEASE_v0.8.0.md
+docs/pdf/
+register-project.bat
