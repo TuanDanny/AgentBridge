@@ -117,6 +117,41 @@ function Install-CloudflaredIfPossible {
   return Resolve-Cloudflared
 }
 
+function Test-LocalHealth($url) {
+  try {
+    Invoke-RestMethod -Uri "$url/health" -Method Get -TimeoutSec 3 | Out-Null
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Test-PortAvailable([string]$hostName, [int]$port) {
+  $listener = $null
+  try {
+    $address = [System.Net.IPAddress]::Parse($hostName)
+    $listener = [System.Net.Sockets.TcpListener]::new($address, $port)
+    $listener.Start()
+    return $true
+  } catch {
+    return $false
+  } finally {
+    if ($listener) {
+      $listener.Stop()
+    }
+  }
+}
+
+function Select-AvailablePort([string]$hostName, [int]$preferredPort) {
+  for ($candidate = $preferredPort; $candidate -lt ($preferredPort + 50); $candidate++) {
+    if (Test-PortAvailable $hostName $candidate) {
+      return $candidate
+    }
+  }
+  Fail "No available local port found from $preferredPort to $($preferredPort + 49)."
+  exit 1
+}
+
 if (!(Test-Path $BridgeDir)) {
   New-Item -ItemType Directory -Path $BridgeDir | Out-Null
 }
@@ -161,11 +196,13 @@ if (!(Test-Path $SchemaSource)) {
 
 Say "Check AgentBridge local server"
 
-$serverOk = $false
-try {
-  Invoke-RestMethod -Uri "$LocalUrl/health" -Method Get -TimeoutSec 3 | Out-Null
-  $serverOk = $true
-} catch {
+$serverOk = Test-LocalHealth $LocalUrl
+
+if ($serverOk -and !(Test-Path $TokenFile)) {
+  Write-Host "Port $Port is already serving AgentBridge, but this clone has no local_token."
+  $Port = Select-AvailablePort $HostName ($Port + 1)
+  $LocalUrl = "http://${HostName}:$Port"
+  Write-Host "Using available local URL for this clone: $LocalUrl"
   $serverOk = $false
 }
 
