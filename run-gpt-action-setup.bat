@@ -14,4 +14,4 @@ if not exist "%ROOT%\scripts\prepare-gpt-action.ps1" (
   exit /b 1
 )
 
-powershell -NoExit -ExecutionPolicy Bypass -File "%ROOT%\scripts\prepare-gpt-action.ps1"
+powershell -ExecutionPolicy Bypass -File "%ROOT%\scripts\prepare-gpt-action.ps1" %*
