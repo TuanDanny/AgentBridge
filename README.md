@@ -212,6 +212,16 @@ node dist\cli.js relay client connect --relay-url https://relay.codexlink.exampl
 node dist\cli.js relay spec
 ```
 
+Docker-hosted relay:
+
+```powershell
+$env:CODEXLINK_PUBLIC_URL="https://relay.example.com"
+docker compose up --build -d
+Invoke-RestMethod http://127.0.0.1:8788/relay/health
+```
+
+The container runs only the hosted relay. It does not mount local projects, tokens, or `.agentbridge`; the local launcher/client remains on the user's machine. Put the container behind a trusted HTTPS/WSS reverse proxy before using it with GPT Actions.
+
 Diagnostics:
 
 ```powershell
@@ -269,9 +279,10 @@ npm test
 git diff --check
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-hosted-relay-e2e.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-relay-loopback.ps1
+docker compose config
 ```
 
-Current local acceptance: 24 test files / 161 tests passing.
+Current local acceptance: 25 test files / 164 tests passing.
 
 ---
 

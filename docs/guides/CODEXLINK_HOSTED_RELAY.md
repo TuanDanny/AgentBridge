@@ -44,6 +44,25 @@ node dist\cli.js relay hosted serve --host 127.0.0.1 --port 8788 --public-url ht
 
 The app serves HTTP internally. HTTPS/WSS termination is expected from the platform, reverse proxy, or tunnel in front of it.
 
+### Docker Compose
+
+Docker runs only the hosted relay service. Local AgentBridge, project files, and `.agentbridge` state remain on the user's machine and connect outbound over WSS.
+
+```powershell
+$env:CODEXLINK_PUBLIC_URL="https://relay.example.com"
+docker compose up --build -d
+docker compose ps
+Invoke-RestMethod http://127.0.0.1:8788/relay/health
+```
+
+Stop it with:
+
+```powershell
+docker compose down
+```
+
+`CODEXLINK_PUBLIC_URL` must be the stable external HTTPS origin configured in GPT Actions. Port `8788` serves plain HTTP inside the container; terminate HTTPS/WSS at the hosting platform or reverse proxy. The Compose service uses a read-only filesystem, drops Linux capabilities, runs as the non-root `node` user, and mounts no workspace directories.
+
 ## Configure User Machine
 
 First-time setup on a new machine:

@@ -1,0 +1,16 @@
+.git
+.github
+.agentbridge
+dist
+node_modules
+docs
+plugins
+scripts
+test
+.env
+.env.*
+*.log
+*.md
+*.bat
+*.cmd
+openapi*.json
