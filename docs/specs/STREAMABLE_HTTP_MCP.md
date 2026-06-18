@@ -11,7 +11,7 @@ AgentBridge does not currently implement Streamable HTTP MCP. There is no workin
 v0.1 STDIO MCP is verified:
 
 ```text
-Codex app -> agentbridge-mcp.cmd -> node dist/cli.js mcp -> StdioServerTransport
+Codex app -> node dist/cli.js mcp -> StdioServerTransport
 ```
 
 The accepted STDIO MCP tools include:
