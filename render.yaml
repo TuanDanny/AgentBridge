@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: codexlink-relay
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /relay/health
+    autoDeploy: true
+    envVars:
+      - key: CODEXLINK_PUBLIC_URL
+        value: auto
+      - key: CODEXLINK_TRUST_PROXY
+        value: "1"

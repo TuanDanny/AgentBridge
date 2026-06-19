@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRelayPairing } from "../src/relayPairing.js";
-import { startRelayClient, type RunningRelayClient } from "../src/relayClient.js";
+import { resolveAllowedProjectIds, startRelayClient, type RunningRelayClient } from "../src/relayClient.js";
 import { startHostedRelayServer, type RunningHostedRelayServer } from "../src/relayHostedServer.js";
 import { startRelayPrototypeServer, type RunningRelayPrototypeServer } from "../src/relayServer.js";
 import { registerCurrentProject, registerProject } from "../src/registry.js";
@@ -167,6 +167,100 @@ describe("relay prototype server", () => {
   it("requires HTTPS public URLs for hosted relay metadata", async () => {
     await expect(startHostedRelayServer({ host: "127.0.0.1", port: 0, publicUrl: "http://relay.codexlink.example.com" })).rejects.toThrow(/https/);
   });
+
+  it("serves a stable GPT Actions schema from trusted proxy metadata", async () => {
+    const hosted = await startHostedRelayServer({ host: "127.0.0.1", port: 0, publicUrl: "auto", trustProxy: true });
+    runningHostedServers.push(hosted);
+
+    const localHealth = await relayJson({ port: hosted.info.port, path: "/relay/health" });
+    expect(localHealth.body).toMatchObject({ ok: true, public_url: null, schema_ready: false });
+
+    const schema = await relayJson({
+      port: hosted.info.port,
+      path: "/relay/openapi.json",
+      headers: {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "codexlink-relay.onrender.com"
+      }
+    });
+    expect(schema.status).toBe(200);
+    expect(schema.body.servers[0].url).toBe("https://codexlink-relay.onrender.com");
+    expect(schema.body.paths["/relay/pair"].post.operationId).toBe("pairDevice");
+    expect(Object.keys(schema.body.paths)).not.toContain("/mcp");
+    expect(JSON.stringify(schema.body)).not.toContain("local_token");
+
+    const insecureProxy = await relayJson({
+      port: hosted.info.port,
+      path: "/relay/openapi.json",
+      headers: { "X-Forwarded-Proto": "http", "X-Forwarded-Host": "codexlink-relay.onrender.com" }
+    });
+    expect(insecureProxy.status).toBe(503);
+    await expect(startHostedRelayServer({ host: "127.0.0.1", port: 0, publicUrl: "auto" })).rejects.toThrow(/trusted proxy/);
+  });
+
+  it("rate limits failed public pairing attempts without storing code values", async () => {
+    const hosted = await startHostedRelayServer({
+      host: "127.0.0.1",
+      port: 0,
+      publicUrl: "https://relay.codexlink.example.com",
+      pairingMaxFailedAttempts: 2,
+      pairingWindowMs: 60_000
+    });
+    runningHostedServers.push(hosted);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const rejected = await relayJson({
+        port: hosted.info.port,
+        path: "/relay/pair",
+        method: "POST",
+        body: { code: `BAD-CODE-${attempt}`, gpt_session: "rate-limit-test" }
+      });
+      expect(rejected.status).toBe(401);
+    }
+    const limited = await relayJson({
+      port: hosted.info.port,
+      path: "/relay/pair",
+      method: "POST",
+      body: { code: "BAD-CODE-THREE", gpt_session: "rate-limit-test" }
+    });
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
+    expect(JSON.stringify(limited.body)).not.toContain("BAD-CODE");
+  });
+
+  it("exposes every explicitly registered project only when requested", async () => {
+    const root = makeTempRoot();
+    const firstRoot = path.join(root, "first");
+    const secondRoot = path.join(root, "second");
+    fs.mkdirSync(firstRoot);
+    fs.mkdirSync(secondRoot);
+    fs.writeFileSync(path.join(firstRoot, "README.md"), "first registered project\n");
+    fs.writeFileSync(path.join(secondRoot, "README.md"), "second registered project\n");
+    registerProject(root, "FirstProject", firstRoot);
+    registerProject(root, "SecondProject", secondRoot);
+    registerProject(root, "ScannedProject", secondRoot, "scan");
+    expect(resolveAllowedProjectIds(root, { allRegistered: true })).toEqual(["FirstProject", "SecondProject"]);
+    expect(() => resolveAllowedProjectIds(root, { allRegistered: true, projectId: "FirstProject" })).toThrow(/either/);
+
+    const hosted = await startHostedRelayServer({ host: "127.0.0.1", port: 0, publicUrl: "https://relay.codexlink.example.com" });
+    runningHostedServers.push(hosted);
+    const client = await startRelayClient({ root, relayUrl: `http://127.0.0.1:${hosted.info.port}`, allRegistered: true, ttlSeconds: 60 });
+    runningClients.push(client);
+    expect(client.allowed_projects).toEqual(["FirstProject", "SecondProject"]);
+
+    const paired = await relayJson({
+      port: hosted.info.port,
+      path: "/relay/pair",
+      method: "POST",
+      body: { code: client.pairing_code, gpt_session: "multi-project-test" }
+    });
+    const relaySession = paired.body.relay_session as string;
+    const projects = await relayJson({ port: hosted.info.port, path: "/chatgpt/projects", relaySession });
+    const second = await relayJson({ port: hosted.info.port, path: "/chatgpt/projects/SecondProject/inspect", relaySession });
+    expect(projects.status).toBe(200);
+    expect(JSON.stringify(projects.body)).toContain("FirstProject");
+    expect(JSON.stringify(projects.body)).toContain("SecondProject");
+    expect(second.status).toBe(200);
+  });
 });
 
 function relayJson(input: {
@@ -175,7 +269,8 @@ function relayJson(input: {
   method?: string;
   body?: unknown;
   relaySession?: string;
-}): Promise<{ status: number; body: any }> {
+  headers?: Record<string, string>;
+}): Promise<{ status: number; body: any; headers: http.IncomingHttpHeaders }> {
   const payload = input.body === undefined ? undefined : JSON.stringify(input.body);
   return new Promise((resolve, reject) => {
     const request = http.request(
@@ -185,6 +280,7 @@ function relayJson(input: {
         path: input.path,
         method: input.method ?? "GET",
         headers: {
+          ...(input.headers ?? {}),
           ...(input.relaySession ? { "X-CodexLink-Relay-Session": input.relaySession } : {}),
           ...(payload ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } : {})
         }
@@ -196,7 +292,7 @@ function relayJson(input: {
           raw += chunk;
         });
         response.on("end", () => {
-          resolve({ status: response.statusCode ?? 0, body: raw ? JSON.parse(raw) : {} });
+          resolve({ status: response.statusCode ?? 0, body: raw ? JSON.parse(raw) : {}, headers: response.headers });
         });
       }
     );

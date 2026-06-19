@@ -340,6 +340,34 @@ async function launcherPublicHealthCheck(root: string): Promise<DoctorCheck> {
   }
 }
 
+async function launcherRelaySchemaCheck(root: string): Promise<DoctorCheck> {
+  try {
+    const config = readLauncherConfig(root);
+    if (config?.tunnelMode !== "relay") {
+      return pass("launcher_relay_schema", "Hosted relay schema check is not required for the configured tunnel mode.");
+    }
+    if (!config.relayUrl) {
+      return warn("launcher_relay_schema", "No relayUrl configured, so /relay/openapi.json was not checked.", "Configure a stable hosted relay URL.");
+    }
+    const expectedOrigin = config.relayUrl.replace(/\/+$/, "");
+    const response = await fetch(`${expectedOrigin}/relay/openapi.json`, { signal: AbortSignal.timeout(2500) });
+    if (!response.ok) {
+      return warn("launcher_relay_schema", diagnoseHttpStatus(response.status), "Verify the hosted relay schema endpoint and deployment proxy.");
+    }
+    const schema = (await response.json()) as { servers?: Array<{ url?: unknown }>; paths?: Record<string, unknown> };
+    const serverUrl = schema.servers?.[0]?.url;
+    if (typeof serverUrl !== "string" || serverUrl.replace(/\/+$/, "") !== expectedOrigin) {
+      return fail("launcher_relay_schema", "Relay OpenAPI server URL does not match launcher relayUrl.", "Fix relay public origin configuration before importing the schema.");
+    }
+    if (schema.paths?.["/mcp"]) {
+      return fail("launcher_relay_schema", "Relay OpenAPI unexpectedly exposes /mcp.", "Remove the HTTP MCP path from the relay schema.");
+    }
+    return pass("launcher_relay_schema", "Stable relay OpenAPI URL is reachable and matches launcher relayUrl.");
+  } catch (error) {
+    return warn("launcher_relay_schema", `Relay OpenAPI URL is not reachable: ${shortError(error)}`, "Check the Render deployment and /relay/openapi.json.");
+  }
+}
+
 function launcherGptUrlCheck(root: string): DoctorCheck {
   try {
     const config = readLauncherConfig(root);
@@ -613,11 +641,12 @@ export async function runDoctor(rootInput = process.cwd(), options: DoctorOption
       launcherConfigCheck(root),
       launcherPublicUrlCheck(root),
       await launcherPublicHealthCheck(root),
-        launcherGptUrlCheck(root),
-        launcherReadinessCheck(root),
-        relayPlaceholderCheck(root),
-        relayPairingCheck(root)
-      );
+      await launcherRelaySchemaCheck(root),
+      launcherGptUrlCheck(root),
+      launcherReadinessCheck(root),
+      relayPlaceholderCheck(root),
+      relayPairingCheck(root)
+    );
   }
   const ok = checks.every((item) => item.status !== "FAIL");
   return {

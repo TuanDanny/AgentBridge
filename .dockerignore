@@ -14,3 +14,4 @@ test
 *.bat
 *.cmd
 openapi*.json
+!openapi.codexlink.relay.gpt-actions.json

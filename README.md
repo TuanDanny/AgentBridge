@@ -222,6 +222,14 @@ Invoke-RestMethod http://127.0.0.1:8788/relay/health
 
 The container runs only the hosted relay. It does not mount local projects, tokens, or `.agentbridge`; the local launcher/client remains on the user's machine. Put the container behind a trusted HTTPS/WSS reverse proxy before using it with GPT Actions.
 
+Always-on Render deployment uses the repo Blueprint and serves the importable GPT Actions schema at:
+
+```text
+https://YOUR-RENDER-SERVICE.onrender.com/relay/openapi.json
+```
+
+See [Render Stable Relay Deployment](docs/guides/CODEXLINK_RENDER_DEPLOYMENT.md).
+
 Diagnostics:
 
 ```powershell
@@ -261,6 +269,7 @@ Guide: [CodexLink Plugin Setup](docs/guides/CODEXLINK_PLUGIN_SETUP.md)
 
 - [One-Click Launcher](docs/guides/CODEXLINK_ONE_CLICK_LAUNCHER.md)
 - [Hosted Relay MVP](docs/guides/CODEXLINK_HOSTED_RELAY.md)
+- [Render Stable Relay Deployment](docs/guides/CODEXLINK_RENDER_DEPLOYMENT.md)
 - [Relay Protocol Spec](docs/specs/CODEXLINK_RELAY_PROTOCOL.md)
 - [Zero-Setup Relay Plan](docs/architecture/CODEXLINK_ZERO_SETUP_RELAY_PLAN.md)
 - [CodexLink Plugin Setup](docs/guides/CODEXLINK_PLUGIN_SETUP.md)
@@ -282,7 +291,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-v12-relay-lo
 docker compose config
 ```
 
-Current local acceptance: 25 test files / 164 tests passing.
+Current local acceptance: 25 test files / 170 tests passing.
 
 ---
 

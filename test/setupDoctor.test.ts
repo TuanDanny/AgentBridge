@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -130,6 +131,41 @@ describe("CodexLink setup doctor", () => {
     expect(JSON.stringify(result)).not.toContain(pairing.code);
     expect(JSON.stringify(result)).not.toContain("local_token");
     expect(JSON.stringify(result)).not.toContain("Bearer ");
+  });
+
+  it("validates a stable hosted relay schema URL", async () => {
+    const root = makeTempRoot();
+    let origin = "";
+    const server = http.createServer((request, response) => {
+      response.setHeader("Content-Type", "application/json");
+      if (request.url === "/relay/health") {
+        response.end(JSON.stringify({ ok: true, status: "hosted_mvp", schema_ready: true }));
+        return;
+      }
+      if (request.url === "/relay/openapi.json") {
+        response.end(JSON.stringify({ openapi: "3.1.0", servers: [{ url: origin }], paths: { "/relay/pair": {} } }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ ok: false }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    origin = `http://127.0.0.1:${port}`;
+    try {
+      setupCodexLauncher(root, {
+        projectId: "DoctorProject",
+        tunnelMode: "relay",
+        relayUrl: origin,
+        relayAllRegistered: true
+      });
+      const result = await runDoctor(root, { projectId: "DoctorProject", launcher: true });
+      expect(result.checks.find((check) => check.name === "launcher_relay_health")).toMatchObject({ status: "PASS" });
+      expect(result.checks.find((check) => check.name === "launcher_relay_schema")).toMatchObject({ status: "PASS" });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 
   it("diagnoses common setup failures with actionable messages", () => {

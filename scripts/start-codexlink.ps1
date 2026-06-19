@@ -80,10 +80,12 @@ function Read-Config {
     autoRelay = $true
     relayUrl = $null
     autoRelayClient = $true
+    relayProjects = @()
+    relayAllRegistered = $false
   }
   if (Test-Path $ConfigFile) {
     $loaded = Get-Content $ConfigFile -Raw | ConvertFrom-Json
-    foreach ($key in @("projectId","host","port","publicBaseUrl","gptUrl","openBrowser","copyGreetingToClipboard","autoBootstrap","autoDoctor","tunnelMode","relayHost","relayPort","autoRelay","relayUrl","autoRelayClient")) {
+    foreach ($key in @("projectId","host","port","publicBaseUrl","gptUrl","openBrowser","copyGreetingToClipboard","autoBootstrap","autoDoctor","tunnelMode","relayHost","relayPort","autoRelay","relayUrl","autoRelayClient","relayProjects","relayAllRegistered")) {
       if ($null -ne $loaded.$key) { $defaults[$key] = $loaded.$key }
     }
   }
@@ -202,7 +204,8 @@ if ($RelayMode) {
     }
     if ($Config.autoRelayClient) {
       if ($DryRun) {
-        Say "Dry-run: would create a short-lived pairing code and start hosted relay client."
+        $relayScope = if ($Config.relayAllRegistered) { "all explicitly registered projects" } elseif (@($Config.relayProjects).Count -gt 0) { (@($Config.relayProjects) -join ", ") } else { [string]$Config.projectId }
+        Say "Dry-run: would create a short-lived pairing code and start hosted relay client for $relayScope."
       } else {
         try {
           $pairingJson = Invoke-Cli @("dist\cli.js","relay","pairing","create","--json")
@@ -211,7 +214,17 @@ if ($RelayMode) {
           $RelayPairingExpiresAt = [string]($pairing | Select-Object -ExpandProperty expires_at)
           Say "Relay pairing: PASS (short-lived code printed once; expires=$RelayPairingExpiresAt)"
           Say-ConsoleOnly "Relay pairing code: $RelayPairingCode"
-          $RelayClientProcess = Start-Process -FilePath "node" -ArgumentList @("dist\cli.js","relay","client","connect","--relay-url",$RelayUrl,"--project",$Config.projectId,"--use-local-pairing") -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+          $relayClientArgs = @("dist\cli.js","relay","client","connect","--relay-url",$RelayUrl,"--use-local-pairing")
+          if ($Config.relayAllRegistered) {
+            $relayClientArgs += "--all-registered"
+          } elseif (@($Config.relayProjects).Count -gt 0) {
+            foreach ($relayProject in @($Config.relayProjects)) {
+              $relayClientArgs += @("--project",[string]$relayProject)
+            }
+          } else {
+            $relayClientArgs += @("--project",[string]$Config.projectId)
+          }
+          $RelayClientProcess = Start-Process -FilePath "node" -ArgumentList $relayClientArgs -WorkingDirectory $Root -WindowStyle Hidden -PassThru
           $RelayClientStarted = $true
           Say "Relay client: started (pid $($RelayClientProcess.Id))"
         } catch {

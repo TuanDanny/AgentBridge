@@ -20,6 +20,8 @@ export interface LauncherConfig {
   autoRelay: boolean;
   relayUrl?: string;
   autoRelayClient: boolean;
+  relayProjects: string[];
+  relayAllRegistered: boolean;
   relayDeviceId?: string;
 }
 
@@ -40,6 +42,8 @@ export interface LauncherSetupOptions {
   autoRelay?: boolean;
   relayUrl?: string;
   autoRelayClient?: boolean;
+  relayProjects?: string[];
+  relayAllRegistered?: boolean;
   relayDeviceId?: string;
 }
 
@@ -83,7 +87,9 @@ export function defaultLauncherConfig(rootInput = process.cwd()): LauncherConfig
     relayHost: "127.0.0.1",
     relayPort: 8787,
     autoRelay: true,
-    autoRelayClient: true
+    autoRelayClient: true,
+    relayProjects: [],
+    relayAllRegistered: false
   };
 }
 
@@ -107,6 +113,11 @@ export function validateLauncherConfig(rootInput: string, input: Partial<Launche
   const relayHost = validateRelayHost(input.relayHost ?? defaults.relayHost);
   const relayPort = validatePort(input.relayPort ?? defaults.relayPort, "Launcher relayPort");
   const relayUrl = validateOptionalRelayUrl(input.relayUrl, "relayUrl");
+  const relayProjects = validateRelayProjects(input.relayProjects ?? defaults.relayProjects);
+  const relayAllRegistered = input.relayAllRegistered ?? defaults.relayAllRegistered;
+  if (relayAllRegistered && relayProjects.length > 0) {
+    throw new Error("Use relayAllRegistered or relayProjects, not both.");
+  }
   const config: LauncherConfig = {
     projectId,
     host,
@@ -119,7 +130,9 @@ export function validateLauncherConfig(rootInput: string, input: Partial<Launche
     relayHost,
     relayPort,
     autoRelay: input.autoRelay ?? defaults.autoRelay,
-    autoRelayClient: input.autoRelayClient ?? defaults.autoRelayClient
+    autoRelayClient: input.autoRelayClient ?? defaults.autoRelayClient,
+    relayProjects,
+    relayAllRegistered
   };
   if (publicBaseUrl) {
     config.publicBaseUrl = publicBaseUrl;
@@ -177,6 +190,8 @@ export function setupLauncher(rootInput = process.cwd(), options: LauncherSetupO
     autoRelay: options.autoRelay ?? existing.autoRelay,
     relayUrl: options.relayUrl ?? existing.relayUrl,
     autoRelayClient: options.autoRelayClient ?? existing.autoRelayClient,
+    relayProjects: options.relayProjects ?? existing.relayProjects,
+    relayAllRegistered: options.relayAllRegistered ?? existing.relayAllRegistered,
     relayDeviceId: options.relayDeviceId ?? existing.relayDeviceId
   });
   const changedFiles: string[] = [];
@@ -232,6 +247,11 @@ function launcherNextSteps(config: LauncherConfig): string[] {
       config.relayUrl
         ? `The launcher can auto-start the hosted relay client for ${config.relayUrl}.`
         : `The launcher can auto-start the loopback relay prototype at http://${config.relayHost}:${config.relayPort}.`,
+      config.relayAllRegistered
+        ? "The relay client exposes all explicitly registered project IDs."
+        : config.relayProjects.length > 0
+          ? `The relay client exposes: ${config.relayProjects.join(", ")}.`
+          : `The relay client exposes the launcher project: ${config.projectId}.`,
       "Pair GPT Actions with the short-lived code printed by the relay client.",
       "Use a trusted stable relay origin for true zero-setup daily use."
     ];
@@ -270,6 +290,23 @@ function validatePort(port: number, label = "Launcher port"): number {
     throw new Error(`${label} must be an integer from 1 to 65535.`);
   }
   return port;
+}
+
+function validateRelayProjects(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const projectId = validateProjectId(value);
+    const key = projectId.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(projectId);
+    }
+  }
+  if (result.length > 50) {
+    throw new Error("Launcher relay project allowlist cannot exceed 50 projects.");
+  }
+  return result;
 }
 
 function validateRelayHost(host: string): string {

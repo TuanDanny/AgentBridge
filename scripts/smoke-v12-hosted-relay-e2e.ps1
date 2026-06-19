@@ -1,5 +1,6 @@
 param(
-  [string]$ProjectId = "AgentBridge"
+  [string]$ProjectId = "AgentBridge",
+  [switch]$AllRegistered
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,7 +66,20 @@ try {
   $RelayUrl = "http://127.0.0.1:$($portMatch.Groups[1].Value)"
   if (Wait-Health "$RelayUrl/relay/health") { Pass "hosted relay health" } else { Fail "hosted relay health" "not reachable" }
 
-  $ClientProcess = Start-Process -FilePath "node" -ArgumentList @("dist\cli.js","relay","client","connect","--relay-url",$RelayUrl,"--project",$ProjectId,"--ttl","60") -WorkingDirectory $Root -RedirectStandardOutput $ClientLog -RedirectStandardError $ClientErr -WindowStyle Hidden -PassThru
+  $schema = Invoke-Json GET "$RelayUrl/relay/openapi.json"
+  if ($schema.servers[0].url -eq "https://relay.codexlink.example.com" -and !$schema.paths."/mcp") {
+    Pass "stable relay OpenAPI schema"
+  } else {
+    Fail "stable relay OpenAPI schema" "server URL mismatch or /mcp present"
+  }
+
+  $clientArgs = @("dist\cli.js","relay","client","connect","--relay-url",$RelayUrl,"--ttl","60")
+  if ($AllRegistered) {
+    $clientArgs += "--all-registered"
+  } else {
+    $clientArgs += @("--project",$ProjectId)
+  }
+  $ClientProcess = Start-Process -FilePath "node" -ArgumentList $clientArgs -WorkingDirectory $Root -RedirectStandardOutput $ClientLog -RedirectStandardError $ClientErr -WindowStyle Hidden -PassThru
   Start-Sleep -Milliseconds 1200
   $clientText = Get-Content $ClientLog -Raw
   $codeMatch = [regex]::Match($clientText, "Pairing code:\s*([A-Z0-9-]+)")

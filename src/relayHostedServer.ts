@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import { hashRelayPairingCode } from "./relaySecurity.js";
@@ -9,7 +12,11 @@ export interface RelayHostedServeOptions {
   host?: string;
   port?: number;
   publicUrl?: string;
+  trustProxy?: boolean;
+  openApiPath?: string;
   requestTimeoutMs?: number;
+  pairingMaxFailedAttempts?: number;
+  pairingWindowMs?: number;
 }
 
 export interface RunningHostedRelayServer {
@@ -52,31 +59,47 @@ interface PendingRelayRequest {
   timeout: NodeJS.Timeout;
 }
 
+interface PairingFailureBucket {
+  failures: number;
+  reset_at: number;
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 const DEFAULT_SESSION_TTL_MS = 60 * 60 * 1000;
+const DEFAULT_PAIRING_MAX_FAILED_ATTEMPTS = 10;
+const DEFAULT_PAIRING_WINDOW_MS = 5 * 60 * 1000;
+const MAX_PAIRING_FAILURE_BUCKETS = 10_000;
+const RELAY_OPENAPI_FILE = "openapi.codexlink.relay.gpt-actions.json";
 
 export async function startHostedRelayServer(options: RelayHostedServeOptions = {}): Promise<RunningHostedRelayServer> {
   const host = options.host ?? "0.0.0.0";
   const port = options.port ?? 8788;
-  const publicUrl = normalizePublicUrl(options.publicUrl ?? `http://${host}:${port}`);
+  const publicUrlMode = normalizePublicUrlMode(options.publicUrl ?? "auto", Boolean(options.trustProxy));
+  const publicUrlHint = publicUrlMode === "auto" ? "auto" : publicUrlMode;
   const startedAt = new Date().toISOString();
   const protocol = getRelayProtocolSpec();
+  const openApiTemplate = readRelayOpenApiTemplate(options.openApiPath);
   const devices = new Map<string, ConnectedDevice>();
   const pairings = new Map<string, PendingPairing>();
   const sessions = new Map<string, RelaySession>();
   const pendingRequests = new Map<string, PendingRelayRequest>();
+  const pairingFailures = new Map<string, PairingFailureBucket>();
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const pairingMaxFailedAttempts = positiveInteger(options.pairingMaxFailedAttempts ?? DEFAULT_PAIRING_MAX_FAILED_ATTEMPTS, "pairingMaxFailedAttempts");
+  const pairingWindowMs = positiveInteger(options.pairingWindowMs ?? DEFAULT_PAIRING_WINDOW_MS, "pairingWindowMs");
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
     try {
+      const requestPublicUrl = resolveRequestPublicUrl(request, publicUrlMode, Boolean(options.trustProxy));
       if (request.method === "GET" && url.pathname === "/relay/health") {
         cleanupExpired();
         sendJson(response, 200, {
           ok: true,
           name: "codexlink-hosted-relay",
           status: protocol.status,
-          public_url: publicUrl,
+          public_url: requestPublicUrl ?? null,
+          schema_ready: Boolean(requestPublicUrl),
           started_at: startedAt,
           connected_devices: devices.size,
           pending_pairings: pairings.size,
@@ -86,11 +109,41 @@ export async function startHostedRelayServer(options: RelayHostedServeOptions = 
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/relay/openapi.json") {
+        if (!requestPublicUrl) {
+          sendJson(response, 503, {
+            ok: false,
+            error: {
+              code: "relay_public_url_unresolved",
+              message: "Configure CODEXLINK_PUBLIC_URL or use auto mode behind a trusted HTTPS proxy."
+            }
+          });
+          return;
+        }
+        sendJson(response, 200, relayOpenApiForPublicUrl(openApiTemplate, requestPublicUrl), {
+          "Cache-Control": "public, max-age=300",
+          "X-Content-Type-Options": "nosniff"
+        });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/relay/pair") {
+        const clientKey = pairingClientKey(request, Boolean(options.trustProxy));
+        const retryAfterSeconds = pairingRetryAfterSeconds(pairingFailures.get(clientKey), pairingMaxFailedAttempts);
+        if (retryAfterSeconds > 0) {
+          sendJson(
+            response,
+            429,
+            { ok: false, error: { code: "pairing_rate_limited", message: "Too many failed pairing attempts. Try again later." } },
+            { "Retry-After": String(retryAfterSeconds) }
+          );
+          return;
+        }
         const body = await readRequestBody(request, protocol.limits.max_request_bytes);
         const code = stringField(body, "code");
         const gptSession = stringField(body, "gpt_session") ?? `gpt_${randomUUID()}`;
         if (!code || !safeSessionHint(gptSession)) {
+          recordPairingFailure(pairingFailures, clientKey, pairingWindowMs);
           sendJson(response, 400, { ok: false, error: { code: "invalid_pairing_request", message: "code and safe gpt_session are required." } });
           return;
         }
@@ -98,6 +151,7 @@ export async function startHostedRelayServer(options: RelayHostedServeOptions = 
         const codeHash = hashRelayPairingCode(code);
         const pairing = pairings.get(codeHash);
         if (!pairing) {
+          recordPairingFailure(pairingFailures, clientKey, pairingWindowMs);
           sendJson(response, 401, { ok: false, error: { code: "pairing_not_found", message: "Pairing code is invalid or expired." } });
           return;
         }
@@ -117,6 +171,7 @@ export async function startHostedRelayServer(options: RelayHostedServeOptions = 
           expires_at: new Date(now + DEFAULT_SESSION_TTL_MS).toISOString()
         };
         pairings.delete(codeHash);
+        pairingFailures.delete(clientKey);
         sessions.set(relaySession, session);
         sendJson(response, 200, {
           ok: true,
@@ -263,7 +318,7 @@ export async function startHostedRelayServer(options: RelayHostedServeOptions = 
     info: {
       host,
       port: boundPort,
-      public_url: publicUrl,
+      public_url: publicUrlHint,
       started_at: startedAt
     },
     close: async () => {
@@ -290,6 +345,11 @@ export async function startHostedRelayServer(options: RelayHostedServeOptions = 
     for (const [sessionId, session] of sessions.entries()) {
       if (new Date(session.expires_at).getTime() <= now) {
         sessions.delete(sessionId);
+      }
+    }
+    for (const [clientKey, bucket] of pairingFailures.entries()) {
+      if (bucket.reset_at <= now) {
+        pairingFailures.delete(clientKey);
       }
     }
   }
@@ -386,11 +446,12 @@ function sendBoundedJson(response: http.ServerResponse, body: unknown, maxBytes:
   sendJson(response, typeof (body as { status?: unknown })?.status === "number" ? ((body as { status: number }).status) : 200, body);
 }
 
-function sendJson(response: http.ServerResponse, status: number, body: unknown): void {
+function sendJson(response: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const payload = JSON.stringify(body, null, 2);
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
-    "Content-Length": Buffer.byteLength(payload)
+    "Content-Length": Buffer.byteLength(payload),
+    ...headers
   });
   response.end(payload);
 }
@@ -438,10 +499,108 @@ function safeSessionHint(input: string): boolean {
   return /^[A-Za-z0-9._:-]{1,128}$/.test(input);
 }
 
+function normalizePublicUrlMode(input: string, trustProxy: boolean): string {
+  if (input.trim().toLowerCase() === "auto") {
+    if (!trustProxy) {
+      throw new Error("Relay public URL auto mode requires trusted proxy mode.");
+    }
+    return "auto";
+  }
+  return normalizePublicUrl(input);
+}
+
 function normalizePublicUrl(input: string): string {
   const url = new URL(input);
   if (url.protocol !== "https:") {
     throw new Error("Relay public URL must use https://. The relay app serves HTTP internally behind external HTTPS/WSS termination.");
   }
   return url.toString().replace(/\/$/, "");
+}
+
+function resolveRequestPublicUrl(request: http.IncomingMessage, mode: string, trustProxy: boolean): string | undefined {
+  if (mode !== "auto") {
+    return mode;
+  }
+  if (!trustProxy) {
+    return undefined;
+  }
+  const protocol = firstForwardedValue(request.headers["x-forwarded-proto"]);
+  const host = firstForwardedValue(request.headers["x-forwarded-host"]);
+  if (protocol?.toLowerCase() !== "https" || !host || host.length > 255 || !/^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(host)) {
+    return undefined;
+  }
+  try {
+    return normalizePublicUrl(`https://${host}`);
+  } catch {
+    return undefined;
+  }
+}
+
+function firstForwardedValue(value: string | string[] | undefined): string | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw?.split(",", 1)[0]?.trim();
+}
+
+function readRelayOpenApiTemplate(inputPath?: string): Record<string, unknown> {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const schemaPath = inputPath ?? path.resolve(moduleDir, "..", RELAY_OPENAPI_FILE);
+  const parsed = JSON.parse(fs.readFileSync(schemaPath, "utf8")) as Record<string, unknown>;
+  if (typeof parsed.openapi !== "string" || !parsed.paths || typeof parsed.paths !== "object") {
+    throw new Error(`Relay OpenAPI schema is invalid: ${schemaPath}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(parsed.paths, "/mcp")) {
+    throw new Error("Relay OpenAPI schema must not define /mcp.");
+  }
+  return parsed;
+}
+
+function relayOpenApiForPublicUrl(template: Record<string, unknown>, publicUrl: string): Record<string, unknown> {
+  const schema = structuredClone(template);
+  schema.servers = [
+    {
+      url: publicUrl,
+      description: "Stable CodexLink hosted relay HTTPS origin."
+    }
+  ];
+  return schema;
+}
+
+function pairingClientKey(request: http.IncomingMessage, trustProxy: boolean): string {
+  if (trustProxy) {
+    const forwarded = firstForwardedValue(request.headers["x-forwarded-for"]);
+    if (forwarded && forwarded.length <= 128) {
+      return `proxy:${forwarded}`;
+    }
+  }
+  return `socket:${request.socket.remoteAddress ?? "unknown"}`;
+}
+
+function pairingRetryAfterSeconds(bucket: PairingFailureBucket | undefined, maxFailedAttempts: number): number {
+  if (!bucket || bucket.reset_at <= Date.now() || bucket.failures < maxFailedAttempts) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil((bucket.reset_at - Date.now()) / 1000));
+}
+
+function recordPairingFailure(buckets: Map<string, PairingFailureBucket>, clientKey: string, windowMs: number): void {
+  const now = Date.now();
+  const existing = buckets.get(clientKey);
+  if (!existing || existing.reset_at <= now) {
+    if (!existing && buckets.size >= MAX_PAIRING_FAILURE_BUCKETS) {
+      const oldestKey = buckets.keys().next().value as string | undefined;
+      if (oldestKey) {
+        buckets.delete(oldestKey);
+      }
+    }
+    buckets.set(clientKey, { failures: 1, reset_at: now + windowMs });
+    return;
+  }
+  existing.failures += 1;
+}
+
+function positiveInteger(value: number, name: string): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return value;
 }

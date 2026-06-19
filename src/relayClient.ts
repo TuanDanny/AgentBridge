@@ -5,12 +5,14 @@ import { getOrCreateRelayDevice, relayDevicePublic, relayDeviceSecretDigest } fr
 import { createRelayPairingCode, hashRelayPairingCode } from "./relaySecurity.js";
 import { getRelayProtocolSpec, type RelayRequestEnvelope } from "./relayProtocol.js";
 import { resolveProjectRoot } from "./paths.js";
-import { validateProjectId } from "./registry.js";
+import { listProjects, validateProjectId } from "./registry.js";
 import { readRelayPairingRegistration } from "./relayPairing.js";
 
 export interface RelayClientConnectOptions {
   relayUrl: string;
-  projectId: string;
+  projectId?: string;
+  projectIds?: string[];
+  allRegistered?: boolean;
   root?: string;
   ttlSeconds?: number;
   useLocalPairing?: boolean;
@@ -22,6 +24,7 @@ export interface RunningRelayClient {
   device: ReturnType<typeof relayDevicePublic>;
   relay_url: string;
   websocket_url: string;
+  allowed_projects: string[];
   close: () => Promise<void>;
 }
 
@@ -29,8 +32,7 @@ const DEFAULT_PAIRING_TTL_SECONDS = 300;
 
 export async function startRelayClient(options: RelayClientConnectOptions): Promise<RunningRelayClient> {
   const root = resolveProjectRoot(options.root ?? process.cwd());
-  const projectId = validateProjectId(options.projectId);
-  const allowedProjectIds = [projectId];
+  const allowedProjectIds = resolveAllowedProjectIds(root, options);
   const relayUrl = normalizeRelayUrl(options.relayUrl);
   const websocketUrl = relayDeviceWebSocketUrl(relayUrl);
   const ttlSeconds = normalizeTtl(options.ttlSeconds);
@@ -65,7 +67,7 @@ export async function startRelayClient(options: RelayClientConnectOptions): Prom
           device_secret_digest: relayDeviceSecretDigest(device),
           pairing_code_hash: pairingHash,
           pairing_expires_at: expiresAt,
-      allowed_projects: allowedProjectIds,
+          allowed_projects: allowedProjectIds,
           content_stored: false
         })
       );
@@ -99,6 +101,7 @@ export async function startRelayClient(options: RelayClientConnectOptions): Prom
     device: relayDevicePublic(device),
     relay_url: relayUrl,
     websocket_url: websocketUrl,
+    allowed_projects: allowedProjectIds,
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);
@@ -110,6 +113,35 @@ export async function startRelayClient(options: RelayClientConnectOptions): Prom
         ws.close();
       })
   };
+}
+
+export function resolveAllowedProjectIds(root: string, options: Pick<RelayClientConnectOptions, "projectId" | "projectIds" | "allRegistered">): string[] {
+  const explicit = [...(options.projectIds ?? []), ...(options.projectId ? [options.projectId] : [])];
+  if (options.allRegistered && explicit.length > 0) {
+    throw new Error("Use either explicit --project values or --all-registered, not both.");
+  }
+  const candidates = options.allRegistered
+    ? listProjects(root)
+        .filter((project) => project.source === "manual" || project.source === "current")
+        .map((project) => project.id)
+    : explicit;
+  if (candidates.length === 0) {
+    throw new Error(options.allRegistered ? "No explicitly registered projects are available." : "At least one relay project is required.");
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const candidate of candidates) {
+    const projectId = validateProjectId(candidate);
+    const key = projectId.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(projectId);
+    }
+  }
+  if (result.length > 50) {
+    throw new Error("Relay project allowlist cannot exceed 50 projects.");
+  }
+  return result;
 }
 
 async function handleRelayMessage(root: string, allowedProjectIds: string[], ws: WebSocket, raw: string): Promise<void> {

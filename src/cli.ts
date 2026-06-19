@@ -259,9 +259,8 @@ function parseCommaList(value?: string): string[] {
     .filter(Boolean);
 }
 
-function collectOption(value: string, previous: string[]): string[] {
-  previous.push(value);
-  return previous;
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
 }
 
 function parseJsonObjectOption(value: string | undefined, optionName: string): Record<string, unknown> | undefined {
@@ -1576,6 +1575,9 @@ setup
   .option("--relay-host <host>", "loopback relay prototype host", "127.0.0.1")
   .option("--relay-port <port>", "loopback relay prototype port", "8787")
   .option("--relay-url <url>", "trusted hosted relay HTTPS/WSS URL")
+  .option("--relay-project <projectId>", "project id to expose through relay; repeat for multiple projects", collectOption)
+  .option("--relay-all-registered", "expose every explicitly registered project through relay")
+  .option("--no-relay-all-registered", "do not expose all registered projects")
   .option("--auto-relay", "auto-start loopback relay prototype in relay mode")
   .option("--no-auto-relay", "do not auto-start loopback relay prototype")
   .option("--auto-relay-client", "auto-start hosted relay client when relayUrl is configured")
@@ -1601,6 +1603,8 @@ setup
       relayHost?: string;
       relayPort: string;
       relayUrl?: string;
+      relayProject?: string[];
+      relayAllRegistered?: boolean;
       autoRelay?: boolean;
       autoRelayClient?: boolean;
       openBrowser?: boolean;
@@ -1629,6 +1633,8 @@ setup
           relayHost: options.relayHost,
           relayPort,
           relayUrl: options.relayUrl,
+          relayProjects: options.relayProject,
+          relayAllRegistered: options.relayAllRegistered,
           autoRelay: options.autoRelay,
           autoRelayClient: options.autoRelayClient,
           openBrowser: options.openBrowser,
@@ -1852,16 +1858,23 @@ relayHosted
   .description("Start the hosted relay MVP HTTP/WSS server behind an external HTTPS proxy.")
   .option("--host <host>", "host to bind", "0.0.0.0")
   .option("--port <port>", "port to bind", process.env.PORT ?? "8788")
-  .requiredOption("--public-url <url>", "trusted public HTTPS URL shown in GPT Actions schema")
-  .action(async (options: { host: string; port: string; publicUrl: string }) => {
+  .option("--public-url <url>", "trusted public HTTPS URL or auto behind a trusted proxy", process.env.CODEXLINK_PUBLIC_URL ?? "auto")
+  .option("--trust-proxy", "trust X-Forwarded-* headers from the deployment proxy", envFlag(process.env.CODEXLINK_TRUST_PROXY))
+  .action(async (options: { host: string; port: string; publicUrl: string; trustProxy?: boolean }) => {
     try {
       const port = Number.parseInt(options.port, 10);
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new Error("Port must be an integer from 0 to 65535.");
       }
-      const running = await startHostedRelayServer({ host: options.host, port, publicUrl: options.publicUrl });
+      const running = await startHostedRelayServer({
+        host: options.host,
+        port,
+        publicUrl: options.publicUrl,
+        trustProxy: Boolean(options.trustProxy)
+      });
       console.log(`CodexLink hosted relay listening on http://${running.info.host}:${running.info.port}`);
-      console.log(`Public URL: ${running.info.public_url}`);
+      console.log(`Public URL: ${running.info.public_url === "auto" ? "auto (trusted proxy)" : running.info.public_url}`);
+      console.log("GPT Actions schema: /relay/openapi.json");
       console.log("External HTTPS/WSS termination is expected at the deployment platform or proxy.");
       console.log("Routes are paired metadata/inspector only. No /mcp, shell, or write routes are exposed.");
     } catch (error) {
@@ -1875,21 +1888,24 @@ relayClient
   .command("connect")
   .description("Open an outbound WebSocket to a hosted relay and print a short-lived pairing code once.")
   .requiredOption("--relay-url <url>", "trusted relay HTTPS/WSS URL")
-  .requiredOption("--project <projectId>", "safe local project id to expose through relay metadata routes")
+  .option("--project <projectId>", "safe local project id to expose; repeat for multiple projects", collectOption)
+  .option("--all-registered", "expose all explicitly registered local projects")
   .option("--ttl <seconds>", "pairing code TTL in seconds, 30-900", "300")
   .option("--use-local-pairing", "read a pending local relay pairing hash instead of generating a raw code")
-  .action(async (options: { relayUrl: string; project: string; ttl: string; useLocalPairing?: boolean }) => {
+  .action(async (options: { relayUrl: string; project?: string[]; allRegistered?: boolean; ttl: string; useLocalPairing?: boolean }) => {
     try {
       const ttlSeconds = Number.parseInt(options.ttl, 10);
       const running = await startRelayClient({
         relayUrl: options.relayUrl,
-        projectId: options.project,
+        projectIds: options.project,
+        allRegistered: Boolean(options.allRegistered),
         ttlSeconds,
         useLocalPairing: Boolean(options.useLocalPairing)
       });
       console.log("CodexLink relay client connected.");
       console.log(`Relay URL: ${running.relay_url}`);
       console.log(`Device ID: ${running.device.device_id}`);
+      console.log(`Allowed projects: ${running.allowed_projects.join(", ")}`);
       if (running.pairing_code) {
         console.log(`Pairing code: ${running.pairing_code}`);
       } else {
@@ -1954,5 +1970,9 @@ program
       handleError(error);
     }
   });
+
+function envFlag(value: string | undefined): boolean {
+  return /^(1|true|yes|on)$/i.test(value ?? "");
+}
 
 await program.parseAsync();

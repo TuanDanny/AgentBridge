@@ -44,6 +44,8 @@ node dist\cli.js relay hosted serve --host 127.0.0.1 --port 8788 --public-url ht
 
 The app serves HTTP internally. HTTPS/WSS termination is expected from the platform, reverse proxy, or tunnel in front of it.
 
+For an always-on managed deployment without a custom domain, use the [Render Stable Relay Deployment](CODEXLINK_RENDER_DEPLOYMENT.md) guide. The hosted relay serves a GPT Builder import schema at `/relay/openapi.json`.
+
 ### Docker Compose
 
 Docker runs only the hosted relay service. Local AgentBridge, project files, and `.agentbridge` state remain on the user's machine and connect outbound over WSS.
@@ -80,6 +82,14 @@ start-codexlink.bat
 
 The launcher starts local AgentBridge, creates a short-lived pairing code, starts the outbound relay client, copies a GPT greeting, and optionally opens the configured GPT URL.
 
+To expose every explicitly registered project through one relay connection:
+
+```powershell
+node dist\cli.js setup launcher --project AgentBridge --tunnel-mode relay --relay-url https://relay.example.com --relay-all-registered
+```
+
+This never accepts arbitrary raw paths. Remove a project from the local registry to remove it from future relay connections.
+
 Stop local processes:
 
 ```powershell
@@ -95,6 +105,8 @@ openapi.codexlink.relay.gpt-actions.json
 ```
 
 Replace the schema server URL with your trusted relay origin. GPTs first calls `pairDevice` with the short-lived code. The response returns `relay_session`; subsequent calls use the `X-CodexLink-Relay-Session` header.
+
+With a stable hosted deployment, GPT Builder can import `https://YOUR-RELAY/relay/openapi.json` directly. Keep GPT visibility set to **Only me** for the pairing-only MVP.
 
 Allowed relay operations:
 

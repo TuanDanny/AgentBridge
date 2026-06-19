@@ -13,9 +13,23 @@ describe("hosted relay container", () => {
     expect(dockerfile).toContain("USER node");
     expect(dockerfile).toContain("/relay/health");
     expect(dockerfile).toContain("relay hosted serve");
-    expect(dockerfile).toContain("CODEXLINK_PUBLIC_URL is required");
+    expect(dockerfile).toContain("openapi.codexlink.relay.gpt-actions.json");
+    expect(dockerfile).toContain("CODEXLINK_PUBLIC_URL:-auto");
     expect(dockerfile).not.toContain("local_token");
     expect(dockerfile).not.toContain("OPENAI_API_KEY");
+  });
+
+  it("ships a Singapore Render Blueprint with stable proxy-origin configuration", () => {
+    const render = fs.readFileSync(path.join(root, "render.yaml"), "utf8");
+
+    expect(render).toContain("runtime: docker");
+    expect(render).toContain("region: singapore");
+    expect(render).toContain("plan: starter");
+    expect(render).toContain("healthCheckPath: /relay/health");
+    expect(render).toContain("CODEXLINK_PUBLIC_URL");
+    expect(render).toContain("CODEXLINK_TRUST_PROXY");
+    expect(render).not.toContain("local_token");
+    expect(render).not.toContain("OPENAI_API_KEY");
   });
 
   it("hardens the compose service and does not mount workspace content", () => {

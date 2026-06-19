@@ -120,6 +120,34 @@ describe("one-click launcher helpers", () => {
     );
   });
 
+  it("supports either explicit relay projects or all registered projects", () => {
+    const root = makeTempRoot();
+    const explicit = validateLauncherConfig(root, {
+      projectId: "AgentBridge",
+      tunnelMode: "relay",
+      relayUrl: "https://relay.example.com",
+      relayProjects: ["AgentBridge", "SecondProject", "agentbridge"]
+    });
+    expect(explicit.config.relayProjects).toEqual(["AgentBridge", "SecondProject"]);
+    expect(explicit.config.relayAllRegistered).toBe(false);
+
+    const all = setupLauncher(root, {
+      dryRun: true,
+      projectId: "AgentBridge",
+      tunnelMode: "relay",
+      relayUrl: "https://relay.example.com",
+      relayAllRegistered: true
+    });
+    expect(all.config.relayAllRegistered).toBe(true);
+    expect(all.next_steps).toContain("The relay client exposes all explicitly registered project IDs.");
+    expect(() =>
+      validateLauncherConfig(root, {
+        relayAllRegistered: true,
+        relayProjects: ["AgentBridge"]
+      })
+    ).toThrow(/not both/);
+  });
+
   it("ships first-time and daily launcher scripts without release or token actions", () => {
     const repoRoot = process.cwd();
     const firstTimeScript = fs.readFileSync(path.join(repoRoot, "setup-codexlink-first-time.bat"), "utf8");
@@ -151,6 +179,8 @@ describe("one-click launcher helpers", () => {
     expect(startPowerShell).toContain('"relay","pairing","create","--json"');
     expect(startPowerShell).toContain('"relay","client","connect","--relay-url",$RelayUrl');
     expect(startPowerShell).toContain("--use-local-pairing");
+    expect(startPowerShell).toContain("--all-registered");
+    expect(startPowerShell).toContain("relayProjects");
     expect(startPowerShell).toContain("Say-ConsoleOnly \"Relay pairing code:");
     expect(startPowerShell).toContain("Relay mode note: use the relay GPT Actions schema only with a trusted relay origin.");
     expect(stopPowerShell).toContain("relay_process_id");

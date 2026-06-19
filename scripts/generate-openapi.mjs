@@ -304,7 +304,7 @@ const relaySpec = {
     title: "CodexLink Relay GPT Actions",
     version: "1.2.0-prototype",
     description:
-      "GPT Actions schema for the planned CodexLink stable relay. It exposes paired metadata routes only and is not a production hosted relay by itself."
+      "GPT Actions schema for the CodexLink hosted relay MVP. It exposes paired metadata routes only and does not add HTTP MCP, shell, or write capability."
   },
   servers: [
     {
