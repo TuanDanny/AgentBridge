@@ -233,15 +233,41 @@ if ($serverOk) {
   Ok "AgentBridge server is healthy"
 }
 
+# Automatically register current project in registry
+node dist\cli.js project register-current | Out-Null
+
 if (!(Test-Path $TokenFile)) {
   Fail "Missing file: $TokenFile"
   Write-Host "AgentBridge server is healthy, but local_token was not created."
   exit 1
 }
 
-Say "Start Cloudflare tunnel"
+Say "Start Tunnel"
 
-if (!$TunnelUrl) {
+if ($TunnelUrl -and ($TunnelUrl.Contains(".ngrok-free.app") -or $TunnelUrl.Contains(".ngrok-free.dev"))) {
+  $ngrokDomain = $TunnelUrl.Replace("https://", "").Replace("http://", "").TrimEnd("/")
+  $ngrokRunning = Get-Process ngrok -ErrorAction SilentlyContinue
+  if (!$ngrokRunning) {
+    Write-Host "Starting ngrok tunnel for domain $ngrokDomain..."
+    $ngrokPath = "D:\APP\ngrok\ngrok.exe"
+    if (!(Test-Path $ngrokPath)) {
+      $ngrokPath = "C:\Users\tuand\AppData\Local\Microsoft\WinGet\Packages\ngrok.ngrok_Microsoft.Winget.Source_8xeaz1e55vf6e\ngrok.exe" # Fallback if installed via winget
+      if (!(Test-Path $ngrokPath)) {
+        $cmd = Get-Command ngrok -ErrorAction SilentlyContinue
+        if ($cmd) { $ngrokPath = $cmd.Source }
+      }
+    }
+    if (!(Test-Path $ngrokPath)) {
+      Fail "ngrok.exe was not found at D:\APP\ngrok\ngrok.exe or on PATH."
+      exit 1
+    }
+    Start-Process -FilePath $ngrokPath -ArgumentList "http", "$Port", "--domain", $ngrokDomain -WindowStyle Hidden
+    Start-Sleep -Seconds 4
+    Ok "ngrok tunnel started"
+  } else {
+    Ok "ngrok is already running"
+  }
+} elseif (!$TunnelUrl) {
   $cloudflared = Install-CloudflaredIfPossible
   if (!$cloudflared) {
     Fail "cloudflared is not installed or not on PATH."
@@ -256,7 +282,7 @@ if (!$TunnelUrl) {
     $tunnelLog = Join-Path $BridgeDir "cloudflared.log"
     $tunnelErr = Join-Path $BridgeDir "cloudflared.err.log"
     Remove-Item $tunnelLog, $tunnelErr -ErrorAction SilentlyContinue
-    $command = "/c `"`"$cloudflared`" tunnel --url `"$LocalUrl`" > `"$tunnelLog`" 2> `"$tunnelErr`"`""
+    $command = "/c `"`"$cloudflared`" tunnel --protocol http2 --url `"$LocalUrl`" > `"$tunnelLog`" 2> `"$tunnelErr`"`""
     $tunnelProcess = Start-Process -FilePath "cmd.exe" -ArgumentList $command -WorkingDirectory $Root -PassThru -WindowStyle Hidden
     Set-Content -Path $TunnelPidFile -Value $tunnelProcess.Id -Encoding ASCII
 
@@ -297,7 +323,7 @@ if (!$TunnelUrl) {
   } else {
     Write-Host "A new Cloudflare tunnel window will open."
     Write-Host "Copy the https://*.trycloudflare.com URL from that window."
-    Start-Process powershell.exe -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", "cd '$Root'; & '$cloudflared' tunnel --url $LocalUrl"
+    Start-Process powershell.exe -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", "cd '$Root'; & '$cloudflared' tunnel --protocol http2 --url $LocalUrl"
   }
 }
 
@@ -318,8 +344,8 @@ if (!$TunnelUrl.StartsWith("https://")) {
   exit 1
 }
 
-if (!$TunnelUrl.Contains(".trycloudflare.com")) {
-  Fail "Tunnel URL should look like https://xxxx.trycloudflare.com"
+if (!($TunnelUrl.Contains(".trycloudflare.com") -or $TunnelUrl.Contains(".ngrok-free.app") -or $TunnelUrl.Contains(".ngrok-free.dev"))) {
+  Fail "Tunnel URL should look like https://xxxx.trycloudflare.com or https://xxxx.ngrok-free.app or https://xxxx.ngrok-free.dev"
   exit 1
 }
 
@@ -331,12 +357,13 @@ $healthOk = $false
 $lastHealthError = $null
 for ($i = 0; $i -lt 12; $i++) {
   try {
-    Invoke-RestMethod -Uri "$TunnelUrl/health" -Method Get -TimeoutSec 10 | Out-Null
+    Invoke-RestMethod -Uri "$TunnelUrl/health" -Method Get -Headers @{ "ngrok-skip-browser-warning" = "true" } -TimeoutSec 10 | Out-Null
     $healthOk = $true
     break
   } catch {
     $lastHealthError = $_.Exception.Message
-    Start-Sleep -Seconds 3
+    ipconfig /flushdns | Out-Null
+    Start-Sleep -Seconds 4
   }
 }
 
@@ -364,6 +391,7 @@ for ($i = 0; $i -lt 8; $i++) {
   try {
     $projects = Invoke-RestMethod -Uri "$TunnelUrl/chatgpt/projects" -Method Get -Headers @{
       Authorization = "Bearer $token"
+      "ngrok-skip-browser-warning" = "true"
     } -TimeoutSec 10
 
     if ($projects.ok -ne $true) {
