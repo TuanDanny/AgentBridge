@@ -9,11 +9,8 @@
   "files": [
     "dist",
     "README.md",
-    "setup-codexlink-first-time.bat",
     "run-gpt-action-setup.bat",
     "restore-ngrok-setup.bat",
-    "start-codexlink.bat",
-    "stop-codexlink.bat",
     "docs/architecture",
     "docs/gpt",
     "docs/guides",

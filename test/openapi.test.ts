@@ -127,6 +127,8 @@ describe("ChatGPT tool adapter OpenAPI spec", () => {
       "/chatgpt/projects/{projectId}/file",
       "/chatgpt/projects/{projectId}/grep",
       "/chatgpt/projects/{projectId}/select",
+      "/chatgpt/projects/register-gui",
+      "/chatgpt/projects/{projectId}/unregister-gui",
       "/chatgpt/projects/{projectId}/inspect",
       "/chatgpt/projects/{projectId}/codex-changes",
       "/chatgpt/projects/{projectId}/review-packet"
