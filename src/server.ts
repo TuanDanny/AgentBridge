@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
 import { URL } from "node:url";
 import { ensureLocalToken, isAuthorized } from "./auth.js";
 import { createChatGptReview, createCodexPrompt } from "./core.js";
@@ -433,7 +433,10 @@ function removeServerInfo(root: string): void {
   fs.rmSync(bridgePath(root, "server.json"), { force: true });
 }
 
-function showFolderPickerDialog(): string | null {
+let isFolderDialogOpen = false;
+let isConfirmDialogOpen = false;
+
+function showFolderPickerDialogAsync(callback: (selectedPath: string | null) => void): void {
   const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -450,18 +453,23 @@ if ($res -eq [System.Windows.Forms.DialogResult]::OK) {
 
   try {
     const encodedScript = Buffer.from(psScript, "utf16le").toString("base64");
-    const stdout = execSync(`powershell.exe -NoProfile -EncodedCommand ${encodedScript}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
+    exec(`powershell.exe -NoProfile -EncodedCommand ${encodedScript}`, {
+      encoding: "utf8"
+    }, (error, stdout) => {
+      if (error) {
+        console.error("Folder picker dialog failed:", error);
+        callback(null);
+      } else {
+        callback(stdout.trim() || null);
+      }
     });
-    return stdout.trim() || null;
   } catch (error) {
-    console.error("Folder picker dialog failed:", error);
-    return null;
+    console.error("Failed to spawn folder picker process:", error);
+    callback(null);
   }
 }
 
-function showUnregisterConfirmationDialog(projectId: string): boolean {
+function showUnregisterConfirmationDialogAsync(projectId: string, callback: (confirmed: boolean) => void): void {
   const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
 $msg = 'Bạn có chắc chắn muốn hủy đăng ký dự án "${projectId}" khỏi AgentBridge không? (Thao tác này chỉ xóa cấu hình đăng ký, không xóa file thực tế trên ổ đĩa).'
@@ -475,14 +483,19 @@ if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
 
   try {
     const encodedScript = Buffer.from(psScript, "utf16le").toString("base64");
-    const stdout = execSync(`powershell.exe -NoProfile -EncodedCommand ${encodedScript}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
+    exec(`powershell.exe -NoProfile -EncodedCommand ${encodedScript}`, {
+      encoding: "utf8"
+    }, (error, stdout) => {
+      if (error) {
+        console.error("MessageBox dialog failed:", error);
+        callback(false);
+      } else {
+        callback(stdout.trim() === "YES");
+      }
     });
-    return stdout.trim() === "YES";
   } catch (error) {
-    console.error("MessageBox dialog failed:", error);
-    return false;
+    console.error("Failed to spawn MessageBox process:", error);
+    callback(false);
   }
 }
 
@@ -597,19 +610,32 @@ export async function startAgentBridgeServer(
       }
 
       if (request.method === "POST" && url.pathname === "/chatgpt/projects/register-gui") {
-        const selectedPath = showFolderPickerDialog();
-        if (!selectedPath) {
-          sendJson(response, 400, { ok: false, error: "canceled", message: "Folder selection failed or was canceled." });
+        if (isFolderDialogOpen) {
+          sendJson(response, 400, { ok: false, error: "already_open", message: "A folder selection dialog is already open on the local screen." });
           return;
         }
-        try {
-          const registered = registerProject(root, projectIdFromRoot(selectedPath), selectedPath, "manual");
-          appendAudit(root, "http.chatgpt.project.register_gui", { project_id: registered.id, path: selectedPath });
-          sendJson(response, 200, { ok: true, project: registered });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          sendJson(response, 400, { ok: false, error: "registration_failed", message });
-        }
+
+        isFolderDialogOpen = true;
+        showFolderPickerDialogAsync((selectedPath) => {
+          isFolderDialogOpen = false;
+          if (!selectedPath) {
+            console.log("Async folder picker canceled or failed.");
+            return;
+          }
+          try {
+            const registered = registerProject(root, projectIdFromRoot(selectedPath), selectedPath, "manual");
+            appendAudit(root, "http.chatgpt.project.register_gui_async", { project_id: registered.id, path: selectedPath });
+            console.log(`Successfully registered project asynchronously: ${registered.id} -> ${selectedPath}`);
+          } catch (error) {
+            console.error("Async project registration failed:", error);
+          }
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          status: "pending",
+          message: "Hộp thoại chọn thư mục (Folder Selection Dialog) đã được mở trên máy tính của bạn. Vui lòng chọn thư mục cục bộ của dự án. Sau khi chọn xong, bạn hãy nhắn 'Kiểm tra lại' hoặc 'List projects' để cập nhật."
+        });
         return;
       }
 
@@ -630,15 +656,32 @@ export async function startAgentBridgeServer(
           return;
         }
 
-        const confirmed = showUnregisterConfirmationDialog(projectId);
-        if (!confirmed) {
-          sendJson(response, 400, { ok: false, error: "canceled", message: "User declined unregistration." });
+        if (isConfirmDialogOpen) {
+          sendJson(response, 400, { ok: false, error: "already_open", message: "A confirmation dialog is already open on the local screen." });
           return;
         }
 
-        const removed = removeProject(root, projectId);
-        appendAudit(root, "http.chatgpt.project.unregister_gui", { project_id: projectId });
-        sendJson(response, 200, { ok: true, unregistered: removed, projectId });
+        isConfirmDialogOpen = true;
+        showUnregisterConfirmationDialogAsync(projectId, (confirmed) => {
+          isConfirmDialogOpen = false;
+          if (!confirmed) {
+            console.log(`Async unregistration for project '${projectId}' declined by user.`);
+            return;
+          }
+          try {
+            const removed = removeProject(root, projectId);
+            appendAudit(root, "http.chatgpt.project.unregister_gui_async", { project_id: projectId });
+            console.log(`Successfully unregistered project asynchronously: ${projectId}`);
+          } catch (error) {
+            console.error("Async unregistration failed:", error);
+          }
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          status: "pending",
+          message: `Hộp thoại cảnh báo xác nhận đã được mở trên máy tính của bạn. Vui lòng chọn 'Yes' hoặc 'No' trên màn hình. Sau khi chọn xong, bạn hãy nhắn 'Kiểm tra lại' hoặc 'List projects' để cập nhật.`
+        });
         return;
       }
 
