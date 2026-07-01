@@ -254,12 +254,38 @@ if ($TunnelUrl -and ($TunnelUrl.Contains(".ngrok-free.app") -or $TunnelUrl.Conta
       $ngrokPath = "C:\Users\tuand\AppData\Local\Microsoft\WinGet\Packages\ngrok.ngrok_Microsoft.Winget.Source_8xeaz1e55vf6e\ngrok.exe" # Fallback if installed via winget
       if (!(Test-Path $ngrokPath)) {
         $cmd = Get-Command ngrok -ErrorAction SilentlyContinue
-        if ($cmd) { $ngrokPath = $cmd.Source }
+        if ($cmd) {
+          $ngrokPath = $cmd.Source
+        } else {
+          $localBinDir = Join-Path $BridgeDir "bin"
+          $ngrokLocalPath = Join-Path $localBinDir "ngrok.exe"
+          if (Test-Path $ngrokLocalPath) {
+            $ngrokPath = $ngrokLocalPath
+          } else {
+            Write-Host "ngrok.exe not found. Downloading ngrok automatically to .agentbridge/bin/..."
+            try {
+              $null = New-Item -ItemType Directory -Force -Path $localBinDir
+              $zipPath = Join-Path $BridgeDir "ngrok.zip"
+              $ngrokZipUrl = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
+              Write-Host "Downloading $ngrokZipUrl..."
+              $webClient = New-Object System.Net.WebClient
+              $webClient.DownloadFile($ngrokZipUrl, $zipPath)
+              Write-Host "Extracting archive..."
+              Expand-Archive -Path $zipPath -DestinationPath $localBinDir -Force
+              Remove-Item -Path $zipPath -Force
+              if (Test-Path $ngrokLocalPath) {
+                $ngrokPath = $ngrokLocalPath
+                Ok "ngrok downloaded and extracted successfully!"
+              } else {
+                throw "Extraction succeeded but ngrok.exe is missing."
+              }
+            } catch {
+              Fail "Failed to download/extract ngrok automatically: $_"
+              exit 1
+            }
+          }
+        }
       }
-    }
-    if (!(Test-Path $ngrokPath)) {
-      Fail "ngrok.exe was not found at D:\APP\ngrok\ngrok.exe or on PATH."
-      exit 1
     }
     Start-Process -FilePath $ngrokPath -ArgumentList "http", "$Port", "--domain", $ngrokDomain -WindowStyle Hidden
     Start-Sleep -Seconds 4
