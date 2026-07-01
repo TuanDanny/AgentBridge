@@ -1169,6 +1169,95 @@
         }
       }
     },
+    "/chatgpt/projects/register-gui": {
+      "post": {
+        "operationId": "registerProjectGui",
+        "summary": "Register a new project via a local folder picker GUI dialog",
+        "description": "Opens a native Windows folder browser dialog on the user's local screen, registers the chosen directory as a new project, and returns the project details.",
+        "responses": {
+          "200": {
+            "description": "Project successfully registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "project": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Folder selection failed or was canceled"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        }
+      }
+    },
+    "/chatgpt/projects/{projectId}/unregister-gui": {
+      "post": {
+        "operationId": "unregisterProjectGui",
+        "summary": "Unregister a project from the registry with a local confirmation GUI dialog",
+        "description": "Opens a native Windows confirmation MessageBox on the user's screen. If confirmed, removes the project from the local projects registry. (Does not delete files on disk).",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the project to unregister.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project successfully unregistered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "unregistered",
+                    "projectId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "unregistered": {
+                      "type": "boolean"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Confirmation was declined or project not found"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        }
+      }
+    },
     "/chatgpt/projects/{projectId}/inspect": {
       "get": {
         "operationId": "inspectProject",

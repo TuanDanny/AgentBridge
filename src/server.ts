@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import { execSync } from "node:child_process";
 import { URL } from "node:url";
 import { ensureLocalToken, isAuthorized } from "./auth.js";
 import { createChatGptReview, createCodexPrompt } from "./core.js";
@@ -10,7 +11,7 @@ import { createCodexChangesSummary, createProjectInspectorSnapshot } from "./ins
 import { bridgePath, getBridgeDir, resolveProjectRoot } from "./paths.js";
 import { getProjectTree, ProjectFileError, readProjectFile, searchProjectFiles, searchProjectText } from "./projectFiles.js";
 import { redactSecrets } from "./redact.js";
-import { findProject, listProjects, projectIdFromRoot, projectRootHint, touchProject, validateProjectId, type RegisteredProject } from "./registry.js";
+import { findProject, listProjects, projectIdFromRoot, projectRootHint, touchProject, validateProjectId, registerProject, removeProject, type RegisteredProject } from "./registry.js";
 import { classifyCommand, createApproval, listApprovals, resolveApproval } from "./safety.js";
 import { appendAudit, ensureProjectScaffold, readSession, updateSession } from "./session.js";
 import {
@@ -432,6 +433,59 @@ function removeServerInfo(root: string): void {
   fs.rmSync(bridgePath(root, "server.json"), { force: true });
 }
 
+function showFolderPickerDialog(): string | null {
+  const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = 'Select a folder to register in AgentBridge'
+$dialog.ShowNewFolderButton = $true
+$dialog.RootFolder = [System.Environment+SpecialFolder]::MyComputer
+$win = New-Object System.Windows.Forms.NativeWindow
+$win.AssignHandle([System.Diagnostics.Process]::GetCurrentProcess().MainWindowHandle)
+$res = $dialog.ShowDialog($win)
+if ($res -eq [System.Windows.Forms.DialogResult]::OK) {
+    Write-Output $dialog.SelectedPath
+}
+`.trim();
+
+  try {
+    const encodedScript = Buffer.from(psScript, "utf16le").toString("base64");
+    const stdout = execSync(`powershell.exe -NoProfile -EncodedCommand ${encodedScript}`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return stdout.trim() || null;
+  } catch (error) {
+    console.error("Folder picker dialog failed:", error);
+    return null;
+  }
+}
+
+function showUnregisterConfirmationDialog(projectId: string): boolean {
+  const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+$msg = 'Bạn có chắc chắn muốn hủy đăng ký dự án "${projectId}" khỏi AgentBridge không? (Thao tác này chỉ xóa cấu hình đăng ký, không xóa file thực tế trên ổ đĩa).'
+$res = [System.Windows.Forms.MessageBox]::Show($msg, 'Xác nhận hủy đăng ký dự án', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning, [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
+    Write-Output 'YES'
+} else {
+    Write-Output 'NO'
+}
+`.trim();
+
+  try {
+    const encodedScript = Buffer.from(psScript, "utf16le").toString("base64");
+    const stdout = execSync(`powershell.exe -NoProfile -EncodedCommand ${encodedScript}`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return stdout.trim() === "YES";
+  } catch (error) {
+    console.error("MessageBox dialog failed:", error);
+    return false;
+  }
+}
+
 export async function startAgentBridgeServer(
   rootInput = process.cwd(),
   options: Partial<ServerOptions> = {}
@@ -539,6 +593,52 @@ export async function startAgentBridgeServer(
 
       if (request.method === "GET" && url.pathname === "/chatgpt/active-project") {
         sendJson(response, 200, readActiveProject(root));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/chatgpt/projects/register-gui") {
+        const selectedPath = showFolderPickerDialog();
+        if (!selectedPath) {
+          sendJson(response, 400, { ok: false, error: "canceled", message: "Folder selection failed or was canceled." });
+          return;
+        }
+        try {
+          const registered = registerProject(root, projectIdFromRoot(selectedPath), selectedPath, "manual");
+          appendAudit(root, "http.chatgpt.project.register_gui", { project_id: registered.id, path: selectedPath });
+          sendJson(response, 200, { ok: true, project: registered });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(response, 400, { ok: false, error: "registration_failed", message });
+        }
+        return;
+      }
+
+      const unregisterProjectRoute = /^\/chatgpt\/projects\/([^/]+)\/unregister-gui$/.exec(url.pathname);
+      if (request.method === "POST" && unregisterProjectRoute) {
+        let projectId: string;
+        try {
+          projectId = decodeURIComponent(unregisterProjectRoute[1]);
+          validateProjectId(projectId);
+        } catch {
+          sendProjectNotFound(response);
+          return;
+        }
+
+        const project = findProject(root, projectId);
+        if (!project) {
+          sendProjectNotFound(response);
+          return;
+        }
+
+        const confirmed = showUnregisterConfirmationDialog(projectId);
+        if (!confirmed) {
+          sendJson(response, 400, { ok: false, error: "canceled", message: "User declined unregistration." });
+          return;
+        }
+
+        const removed = removeProject(root, projectId);
+        appendAudit(root, "http.chatgpt.project.unregister_gui", { project_id: projectId });
+        sendJson(response, 200, { ok: true, unregistered: removed, projectId });
         return;
       }
 
