@@ -57,6 +57,8 @@ Quick tunnel and direct stable tunnel/domain flows are still supported. Relay mo
 
 ## Quick Start
 
+### Link GPTs: https://chatgpt.com/g/g-6a1dc7d0f64481919bd011f2ff6c8535-codexlink
+
 ### Flow A: Local Launcher Only
 
 ```powershell
